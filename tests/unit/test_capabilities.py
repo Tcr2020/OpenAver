@@ -389,6 +389,7 @@ class TestCapabilitiesDescriptionHonesty:
         assert "完整番號格式" in desc
         assert "不是完整番號格式" in desc
         assert "不跨站合併" in desc
+        assert "無碼模式開啟時例外" in desc
 
     def test_enrich_single_source_description_explains_auto_default_consequence(self, client):
         data = client.get("/api/capabilities").json()

@@ -224,8 +224,9 @@ def scrape_single(request: ScrapeRequest) -> dict:
         metadata['number'] = number
     else:
         # 沒有 metadata 才重新搜尋
-        if is_number_format(number):
-            results = smart_search(number, uncensored_mode=is_uncensored_mode_effective(config), proxy_url=_proxy_url)
+        uncensored_mode = is_uncensored_mode_effective(config)
+        if is_number_format(number) or uncensored_mode:
+            results = smart_search(number, uncensored_mode=uncensored_mode, proxy_url=_proxy_url)
             metadata = dict(results[0]) if results else None
         else:
             metadata = search_jav(number, proxy_url=_proxy_url)

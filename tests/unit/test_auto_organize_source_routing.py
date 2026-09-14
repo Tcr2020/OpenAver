@@ -103,7 +103,7 @@ class TestAutoOrganizeSourceRouting:
         write_video(fav, "dummy.mp4")
         config = make_config(fav)
         config["search"]["proxy_url"] = "http://proxy.test:8080"
-        config["search"]["uncensored_mode_enabled"] = True
+        # 不設 uncensored_mode_enabled（預設 False），單獨證明 strict 半邊
 
         mocker.patch("core.auto_organize.extract_number", return_value="SONE-205")
         mock_smart = mocker.patch("core.auto_organize.smart_search", return_value=[])
@@ -114,7 +114,7 @@ class TestAutoOrganizeSourceRouting:
 
         mock_smart.assert_called_once()
         kwargs = mock_smart.call_args.kwargs
-        assert kwargs.get("uncensored_mode") is True
+        assert kwargs.get("uncensored_mode") is False
         assert kwargs.get("proxy_url") == "http://proxy.test:8080"
         assert mock_smart.call_args.args[0] == "SONE-205"
         mock_search.assert_not_called()
@@ -238,15 +238,12 @@ class TestAutoOrganizeSourceRouting:
 
 @pytest.mark.parametrize("case", _INVARIANT_CASES)
 def test_guard_functions_agree_across_modules(case):
-    """I-147d-2：兩模組 import 的 is_number_format 對同一批 CASES 產出同一布林。
+    """哨兵：兩邊 import 的是同一個 is_number_format 函式物件（恆真式）。
 
-    I-147d-2 要求「兩條入庫路徑對同一 number 選到同一個上游函式」，而兩處的
-    分流程式碼是同一種形狀（if is_number_format(number): smart_search(...) else:
-    search_jav(...)）——這件事已經由邊界條件 1/2（本卡 mutation 點）與 T1 既有的
-    test_legal_number_calls_smart_search_not_search_jav／
-    test_illegal_format_calls_search_jav_not_smart_search 分別各自守住兩邊的
-    「if 條件真的是 is_number_format(number)」；本測試補上缺的那一塊——證明兩個
-    模組 import 進來的 is_number_format 對同一批 27 個輸入產出同一個布林值。
+    這條不是 I-147d-2。I-147d-2（兩條入庫路徑對同一 number 選到同一個上游函式）
+    由兩邊各自的 mock-and-assert-call 測試守住。本測試只防「未來有人把某一邊
+    改成自己重新定義的判斷式」——兩邊若仍指向 core.scraper.is_number_format，
+    對同一輸入必然同值；它證明不了分流演算法本身的對稱性。
     """
     import core.auto_organize as ao_mod
     import web.routers.scraper as ws_mod

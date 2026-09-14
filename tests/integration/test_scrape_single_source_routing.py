@@ -153,6 +153,34 @@ class TestScrapeSingleSourceRouting:
         mock_smart.assert_called_once()
         assert mock_smart.call_args.kwargs.get("uncensored_mode") is True
 
+    def test_nonstrict_number_with_uncensored_mode_calls_smart_search(
+        self, client, mocker
+    ):
+        """non-strict 番號（FC2-53）＋無碼模式開 → smart_search，不走 search_jav。"""
+        mocker.patch(
+            "web.routers.scraper.is_uncensored_mode_effective",
+            return_value=True,
+        )
+        mock_smart = mocker.patch(
+            "web.routers.scraper.smart_search",
+            return_value=[{"number": "FC2-53", "title": "Test"}],
+        )
+        mock_search = mocker.patch("web.routers.scraper.search_jav")
+        mocker.patch(
+            "web.routers.scraper.organize_file",
+            return_value={"duplicate": True, "duplicate_target": "x.mp4"},
+        )
+
+        resp = client.post(
+            "/api/scrape-single",
+            json={"file_path": "/dummy/FC2-53.mp4", "number": "FC2-53"},
+        )
+        assert resp.status_code == 200
+        mock_smart.assert_called_once()
+        assert mock_smart.call_args.kwargs.get("uncensored_mode") is True
+        assert mock_smart.call_args.args[0] == "FC2-53"
+        mock_search.assert_not_called()
+
     def test_metadata_provided_skips_both_search_functions(self, client, mocker):
         """邊界 6：帶 metadata → smart_search / search_jav 皆不呼叫。"""
         mock_smart = mocker.patch("web.routers.scraper.smart_search")
