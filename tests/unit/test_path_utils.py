@@ -1526,15 +1526,29 @@ class TestIsFsPathUnderDir:
         assert any(record.levelname == 'WARNING' for record in caplog.records)
 
     def test_false_result_logs_resolved_values(self, tmp_path, caplog):
-        """比對回 False 時，WARNING log 必須同時含 root_n／target_n 兩個 resolved 值。"""
+        """比對回 False 時，WARNING log 必須同時含 root_n／target_n 兩個 resolved 值。
+
+        兩個參數刻意傳**非 canonical** 形狀（繞過 sub/.. 再回來），讓 resolved 值
+        不是原始參數字串的子字串——否則 log 裡本來就印了 fs_path=／root_fs_path=
+        兩個原始參數，斷言會從那裡矇到，把 resolved 值整段拿掉也不會轉紅（假綠）。
+        下方 sanity 斷言就是在釘死這個前提。
+        """
+        sub = tmp_path / "sub"
+        sub.mkdir()
         root = tmp_path / "root"
         root.mkdir()
         outside = tmp_path / "outside"
         outside.mkdir()
-        root_n = os.path.normcase(os.path.realpath(str(root)))
-        target_n = os.path.normcase(os.path.realpath(str(outside)))
+        # 非 canonical 輸入：/tmp/../sub/../root、/tmp/.../sub/../outside
+        root_raw = str(sub / ".." / "root")
+        target_raw = str(sub / ".." / "outside")
+        root_n = os.path.normcase(os.path.realpath(root_raw))
+        target_n = os.path.normcase(os.path.realpath(target_raw))
+        # sanity：resolved 值必須不是原始參數的子字串，這條測試才有鑑別力
+        assert root_n not in root_raw and root_n not in target_raw
+        assert target_n not in root_raw and target_n not in target_raw
         with caplog.at_level(logging.WARNING):
-            result = path_utils.is_fs_path_under_dir(str(outside), str(root))
+            result = path_utils.is_fs_path_under_dir(target_raw, root_raw)
         assert result is False
         warning_text = "\n".join(
             r.getMessage() for r in caplog.records if r.levelname == 'WARNING'
@@ -1546,8 +1560,9 @@ class TestIsFsPathUnderDir:
         """案例 11：前綴碰撞 /base/media2 vs /base/media → False。
 
         鎖住「不是裸 startswith」——is_path_under_dir 的既有 docstring 說明它存在
-        就是為了擋 E:/media 誤匹配 E:/media2，這裡驗證新 helper 用 commonpath
-        天然不誤判，且有測試守住（未來若被「優化」成 startswith 要有東西變紅）。
+        就是為了擋 E:/media 誤匹配 E:/media2，這裡驗證本 helper 的前綴比對是**帶
+        分隔符邊界**的（root_n + os.path.sep），不是裸 startswith，且有測試守住
+        （未來若被「優化」成不帶分隔符的 startswith 要有東西變紅）。
         """
         base = tmp_path / "base"
         media = base / "media"

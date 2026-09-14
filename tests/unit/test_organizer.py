@@ -5369,8 +5369,12 @@ class TestOrganizeContainment:
 
     def test_cross_drive_mocked_rejected(self, tmp_path):
         """
-        跨 drive 情境：mock is_fs_path_under_dir 直接回 False（模擬 commonpath
-        ValueError fail-closed 後的結果），即使檔名/actors 完全正常也必須拒絕。
+        跨 drive 情境：mock is_fs_path_under_dir 直接回 False（模擬 containment
+        判定為「不在範圍內」後的結果），即使檔名/actors 完全正常也必須拒絕。
+
+        註：跨 drive 在現行演算法下是正常、無例外的 False 判定（不再經由
+        commonpath 的 ValueError），本測試鎖的是「拒絕之後呼叫端怎麼做」，
+        與判定是怎麼得出來的無關。
         """
         src = tmp_path / "SONE-205.mp4"
         src.write_bytes(b"original content")
