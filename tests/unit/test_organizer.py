@@ -7,6 +7,7 @@ import io
 import json
 import os
 import shutil
+import xml.etree.ElementTree as ET
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,7 @@ import requests
 from PIL import Image
 
 from core.organizer import _detect_suffixes, format_string, organize_file, crop_to_poster, generate_nfo, extract_chinese_title, download_image, truncate_to_chars, truncate_title, _detect_vr_cluster, _is_multipart_kw, _poster_window_ratio, generate_jellyfin_images
+import core.organizer as organizer
 from core.focal import requires_face_detection
 from core.scrapers.utils import normalize_number_impl
 from tests.conftest import MOCK_FOCAL_XY
@@ -2409,6 +2411,332 @@ class TestGenerateNfoRatingLine:
         assert result is True
         content = nfo_path.read_text(encoding="utf-8")
         assert "<rating>" not in content
+
+
+class TestGenerateNfoNoUnescapedInterpolation:
+    """generate_nfo() 的 f-string 不得出現未預期的裸插值（NFO-CTRL-01d）。
+
+    # [lint-guard: pytest-justified] Python-AST 源碼語意守衛——CLAUDE.md「Lint 守衛規則」
+    # 明列為 pytest 例外（eslint/static_guard_lint 表達不了「這個插值有沒有過 html.escape」）。
+
+    **為什麼要有這條**：PR #191 的外部 review 連三輪在同一個函式找到同一種洞
+    （控制字元 → basename 回流 → 容器型別 → duration），每一輪都是「又漏一個欄位」。
+    問題不是漏，是**漏了誰都看不出來**：這支函式用 f-string 手組 XML，escape 是
+    逐格 opt-in 的，少寫一個 `html.escape()` 沒有任何機制會說話。
+    這條守衛把當時的窮舉盤點固化下來——新的裸插值出現就紅，不必等下一個 reviewer。
+
+    **不改成 ElementTree 組 XML 的理由**：那是承重重構（既有 byte-identical NFO 測試
+    綁死輸出格式），不在 hotfix 範圍；守衛先把回歸擋住，重構另開。
+    """
+
+    # 允許的裸插值 → (預期出現次數, 為什麼安全)。加新項目必須寫得出理由。
+    #
+    # ⚠️ **key 帶次數不是為了好看**（Codex PR #191 四次審核 P3）：只用名稱當 key 時，
+    # 已被允許的名稱在**別的位置**重新出現不會被發現——例如 `number` 因為
+    # `display_title = f"[{number}]{_t}"` 這個安全的中間運算而在清單裡，之後若有人寫
+    # `nfo_content += f"<foo>{number}</foo>"`（真的裸插進 XML），守衛仍會綠。
+    # 綁次數之後，任何**新的一次出現**都會讓對帳不符而轉紅，作者必須回來說明它安全在哪。
+    # 次數只在增刪插值時才變動，不隨行號漂移。
+    ALLOWED_UNESCAPED = {
+        "_t": (1, "組 display_title 的中間值；使用時才 html.escape(display_title)"),
+        "number": (2, 'display_title 的三元式兩個分支各一次（f"[{number}]{_t}" if _t else f"[{number}]"）；都是中間值，使用時才 html.escape(display_title)'),
+        "poster_suffix": (1, "字面常數 '-poster' / ''"),
+        "fanart_suffix": (1, "字面常數 '-fanart' / ''"),
+        "rating * 2": (1, "有 isinstance 數值守衛 ＋ :.1f 格式 → 只可能是數字"),
+        "_duration": (1, "已由 isinstance(int) and not bool 收斂，非整數走空 runtime 分支"),
+        "set_tag": (1, "預組 XML 片段，內容組裝時已 html.escape(series)"),
+        "label_tag": (1, "預組 XML 片段，內容組裝時已 html.escape(label)"),
+        "runtime_tag": (1, "預組 XML 片段，內容是收斂後的 _duration"),
+        "director_tag": (1, "預組 XML 片段，內容組裝時已 html.escape(director)"),
+        "poster_tag": (1, "預組 XML 片段，內容組裝時已 html.escape(basename)"),
+        "fanart_tag": (2, "預組 XML 片段（<thumb> 與 <fanart> 各一），內容已 html.escape(basename)"),
+        "rating_line": (1, "預組 XML 片段，內容是數字格式化結果"),
+        "external_block": (1, "預組 XML 片段，內容組裝時已 html.escape"),
+        "e": (1, "logger.error 的例外訊息，不進 XML"),
+    }
+
+    def _collect(self):
+        import ast
+        src = Path(organizer.__file__).read_text(encoding="utf-8")
+        fn = next(
+            n for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.FunctionDef) and n.name == "generate_nfo"
+        )
+        found = {}
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.JoinedStr):
+                continue
+            for v in node.values:
+                if not isinstance(v, ast.FormattedValue):
+                    continue
+                expr = ast.unparse(v.value)
+                if expr.startswith("html.escape("):
+                    continue
+                count, first_line = found.get(expr, (0, v.lineno))
+                found[expr] = (count + 1, min(first_line, v.lineno))
+        return found
+
+    def test_no_new_unescaped_interpolation(self):
+        found = self._collect()
+        unexpected = {e: v for e, v in found.items() if e not in self.ALLOWED_UNESCAPED}
+        assert not unexpected, (
+            "generate_nfo() 出現未登記的裸插值——它會直接落進 NFO 的 XML。\n"
+            "要嘛包 html.escape()，要嘛加進 ALLOWED_UNESCAPED 並寫出為什麼安全：\n"
+            + "\n".join(f"  :{ln}  {e}" for e, (_n, ln) in sorted(unexpected.items(), key=lambda kv: kv[1][1]))
+        )
+
+    def test_allowed_occurrence_counts_match(self):
+        """已允許的名稱在**新的位置**再出現一次也要紅（Codex PR #191 四次審核 P3）。
+
+        只比對名稱的話，`number` 這種因為安全中間運算而被允許的名稱，
+        日後被裸插進真正的 XML 元素時守衛不會說話。綁次數才讓
+        「下一個漏掉的插值一定紅」這句話成立。
+        """
+        found = self._collect()
+        drift = []
+        for expr, (expected, reason) in self.ALLOWED_UNESCAPED.items():
+            actual = found.get(expr, (0, 0))[0]
+            if actual != expected:
+                drift.append(f"  {expr!r}: 登記 {expected} 次，實際 {actual} 次（{reason}）")
+        assert not drift, (
+            "generate_nfo() 裡已允許的裸插值出現次數變了——新增的那一次落在哪裡？\n"
+            "確認它安全之後再更新 ALLOWED_UNESCAPED 的次數：\n" + "\n".join(drift)
+        )
+
+    def test_allowlist_has_no_stale_entries(self):
+        found = self._collect()
+        stale = sorted(set(self.ALLOWED_UNESCAPED) - set(found))
+        assert not stale, (
+            f"ALLOWED_UNESCAPED 有已經不存在於 generate_nfo() 的項目，請刪除：{stale}"
+        )
+
+
+class TestGenerateNfoIllegalXmlChars:
+    """generate_nfo() XML 不合法控制字元淨化（NFO-CTRL-01，PR #191 F1 + 加固）。
+
+    每條都真的 ET.parse() 寫出的檔案——只斷言字串裡沒有那個字元驗不到「解析得動」，
+    這正是本次要修的病灶（裸控制字元讓 NFO 寫出成功但整份 XML 解析失敗）。
+    parse 失敗時轉成明確 assert（不讓 ET.ParseError 原樣穿出去），維持
+    「轉紅＝斷言失敗，不是例外崩潰」的形狀。
+    """
+
+    def _parse_or_fail(self, nfo_path):
+        try:
+            return ET.parse(nfo_path), True
+        except ET.ParseError as e:
+            return e, False
+
+    def test_null_byte_stripped_from_summary(self, tmp_path):
+        nfo_path = tmp_path / "TEST-CTRL-001.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-001",
+            title="測試標題",
+            output_path=str(nfo_path),
+            summary="before\x00after",
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+        plot = tree.getroot().find("plot").text
+        assert plot == "beforeafter"
+
+    def test_bell_stripped_from_summary(self, tmp_path):
+        nfo_path = tmp_path / "TEST-CTRL-002.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-002",
+            title="測試標題",
+            output_path=str(nfo_path),
+            summary="before\x07after",
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+        plot = tree.getroot().find("plot").text
+        assert plot == "beforeafter"
+
+    def test_vertical_tab_stripped_from_summary(self, tmp_path):
+        nfo_path = tmp_path / "TEST-CTRL-003.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-003",
+            title="測試標題",
+            output_path=str(nfo_path),
+            summary="before\x0bafter",
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+        plot = tree.getroot().find("plot").text
+        assert plot == "beforeafter"
+
+    def test_escape_char_stripped_from_summary(self, tmp_path):
+        nfo_path = tmp_path / "TEST-CTRL-004.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-004",
+            title="測試標題",
+            output_path=str(nfo_path),
+            summary="before\x1bafter",
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+        plot = tree.getroot().find("plot").text
+        assert plot == "beforeafter"
+
+    def test_control_char_stripped_from_title_field(self, tmp_path):
+        """正文以外的欄位（title）含控制字元同樣要被剝除——壞的是整份 XML，不限 summary。"""
+        nfo_path = tmp_path / "TEST-CTRL-005.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-005",
+            title="測試\x0c標題",
+            output_path=str(nfo_path),
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+        title_text = tree.getroot().find("title").text
+        assert title_text == "[TEST-CTRL-005]測試標題"
+
+    def test_none_summary_does_not_crash_after_move(self, tmp_path):
+        """PR #191 CodeRabbit P2 的真實那一半：`scrape_single` 對 metadata 零驗證，
+        AI 送 `{"_summary": null}` 時 `metadata.get('_summary','')` 回 None（key 存在
+        ⇒ default 不生效），而 generate_nfo() 在 atomic_move() 之後才跑——舊碼
+        `html.escape(None)` 會 AttributeError，畫面說「整理失敗」但影片檔已經搬走。
+        與 147c-T2 的 `<rating>` 型別防護同一條 sink、同一個理由（BE-GUARD-01）。"""
+        nfo_path = tmp_path / "TEST-CTRL-007.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-007",
+            title="測試標題",
+            output_path=str(nfo_path),
+            summary=None,
+        )
+        assert result is True, "summary=None 不得讓 generate_nfo 崩潰或回 False"
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+        assert (tree.getroot().find("plot").text or "") == ""
+
+    def test_none_in_other_string_fields_does_not_crash(self, tmp_path):
+        """同一條零驗證管道可以讓任何字串欄位變 None，不是只有 summary。"""
+        nfo_path = tmp_path / "TEST-CTRL-008.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-008",
+            title="測試標題",
+            output_path=str(nfo_path),
+            original_title=None,
+            maker=None,
+            director=None,
+            series=None,
+            label=None,
+            url=None,
+            date=None,
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+
+    def test_malformed_user_tags_container_does_not_crash(self, tmp_path):
+        """Codex PR #191 二次審核 P2-A：`user_tags` 在 organize_file 裡是
+        **搬檔之後**才取出交給 generate_nfo（`core/organizer.py:1384`），而
+        `user_tags or []` 會原樣保留非零整數 → 迭代整數 TypeError → 又是
+        「畫面說整理失敗、影片已搬走」。既有病（迭代點 :951 本來就在），
+        與 _summary=None 同根，一併在 sink 收斂容器型別。"""
+        for bad in (123, {"a": 1}, object()):
+            nfo_path = tmp_path / f"TEST-CTRL-CONT-{id(bad)}.nfo"
+            result = generate_nfo(
+                number="TEST-CTRL-009",
+                title="測試標題",
+                output_path=str(nfo_path),
+                user_tags=bad,
+            )
+            assert result is True, f"user_tags={bad!r} 不得讓 generate_nfo 崩潰"
+            tree, ok = self._parse_or_fail(nfo_path)
+            assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+
+    def test_bare_string_list_param_not_iterated_per_character(self, tmp_path):
+        """裸字串也要擋：否則 'abc' 會被逐字元迭代成三個單字元 tag。"""
+        nfo_path = tmp_path / "TEST-CTRL-010.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-010",
+            title="測試標題",
+            output_path=str(nfo_path),
+            tags="abc",
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok
+        genres = [e.text for e in tree.getroot().findall("genre")]
+        assert genres == [], f"裸字串不該被逐字元展開，實際: {genres}"
+
+    def test_control_char_in_output_path_basename_stripped(self, tmp_path):
+        """Codex PR #191 二次審核 P2-B：basename 衍生自 output_path，會被寫進
+        <poster>/<thumb>/<fanart>。sanitize_filename() 不移除控制字元，所以帶
+        \x07 的 title 會讓檔名帶控制字元，再繞回 XML——title 那格淨化了也沒用。"""
+        nfo_path = tmp_path / "TEST-CTRL-011\x07bad.nfo"
+        result = generate_nfo(
+            number="TEST-CTRL-011",
+            title="測試標題",
+            output_path=str(nfo_path),
+            has_poster=True,
+            has_fanart=True,
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+        root = tree.getroot()
+        for tag_name in ("poster", "fanart"):
+            for el in root.findall(tag_name):
+                assert "\x07" not in (el.text or ""), f"<{tag_name}> 仍含控制字元"
+
+    def test_duration_non_int_falls_back_to_empty_runtime(self, tmp_path):
+        """Codex PR #191 三次審核 P2：`<runtime>` 是全函式唯一的裸插值。
+        `duration: Optional[int]` 只是宣告，零驗證的 scrape_single 讓任意型別穿到
+        sink，而取值點（:1423）在 atomic_move() 之後 → `<runtime>1&2</runtime>`
+        寫出成功但整份 XML 解析失敗。契約比照 enrich_single（整數或 null）。"""
+        for bad in ("1&2", "120", "<x>", {"m": 90}, [90], 90.5, True, False, chr(7)):
+            nfo_path = tmp_path / f"TEST-CTRL-DUR-{abs(hash(repr(bad)))}.nfo"
+            result = generate_nfo(
+                number="TEST-CTRL-012",
+                title="測試標題",
+                output_path=str(nfo_path),
+                duration=bad,
+            )
+            assert result is True, f"duration={bad!r} 不得讓 generate_nfo 崩潰"
+            tree, ok = self._parse_or_fail(nfo_path)
+            assert ok, f"duration={bad!r} 的 NFO 應可解析，實際: {tree}"
+            runtime = tree.getroot().find("runtime")
+            assert (runtime.text or "") == "", (
+                f"duration={bad!r} 非整數應收斂成空 <runtime>，實際: {runtime.text!r}"
+            )
+
+    def test_duration_real_int_still_written(self, tmp_path):
+        """正向對照：合法整數不可以被上面那道收斂一起吃掉。"""
+        nfo_path = tmp_path / "TEST-CTRL-013.nfo"
+        assert generate_nfo(
+            number="TEST-CTRL-013",
+            title="測試標題",
+            output_path=str(nfo_path),
+            duration=120,
+        ) is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok
+        assert tree.getroot().find("runtime").text == "120"
+
+    def test_tab_newline_cr_preserved_in_summary(self, tmp_path):
+        """正向對照：\\t/\\n/\\r 是 XML 合法字元，簡介換行不可被淨化誤殺。"""
+        nfo_path = tmp_path / "TEST-CTRL-006.nfo"
+        summary_text = "line1\nline2\ttabbed\rline3"
+        result = generate_nfo(
+            number="TEST-CTRL-006",
+            title="測試標題",
+            output_path=str(nfo_path),
+            summary=summary_text,
+        )
+        assert result is True
+        tree, ok = self._parse_or_fail(nfo_path)
+        assert ok, f"NFO 應可被 XML parser 解析，實際: {tree}"
+        plot = tree.getroot().find("plot").text
+        # XML 解析會把裸 \r 正規化成 \n（XML 1.0 §2.11 line-ending normalization），
+        # 這是 parser 的行為不是我們淨化的行為——比對時同步正規化再斷言。
+        assert plot == summary_text.replace("\r", "\n")
 
 
 # ============ download_image() 測試 ============
