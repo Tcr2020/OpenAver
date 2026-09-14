@@ -16,7 +16,7 @@ from core.logger import get_logger
 from core.organizer import extract_chinese_title, organize_file
 from core.path_utils import coerce_to_file_uri
 from core.readonly_source import is_path_readonly, readonly_source_prefixes, writable_source_prefixes
-from core.scraper import smart_search
+from core.scraper import smart_search, search_jav, is_number_format
 from core.scrapers.utils import extract_number, has_japanese
 from core.source_settings import is_uncensored_mode_effective
 from core.translate_service import create_translate_service
@@ -170,7 +170,11 @@ def run_one_round(
                 completed += 1
                 continue
 
-        results = smart_search(number, uncensored_mode=uncensored_mode, proxy_url=proxy_url)  # CD-144-4：逐字同手動批次
+        if is_number_format(number) or uncensored_mode:
+            results = smart_search(number, uncensored_mode=uncensored_mode, proxy_url=proxy_url)  # CD-144-4：逐字同手動批次
+        else:
+            _r = search_jav(number, proxy_url=proxy_url)
+            results = [_r] if _r else []
         if not results:
             if _remember_failure('not_found', upper_number, number):
                 newly_recorded += 1
