@@ -2358,6 +2358,59 @@ class TestGenerateNfoAdditional:
         assert "<name>女優B</name>" in content
 
 
+class TestGenerateNfoRatingLine:
+    """generate_nfo() rating_line 型別防護（TASK-147c-T2）"""
+
+    def test_generate_nfo_rating_line_malformed_type_no_crash(self, tmp_path):
+        nfo_path = tmp_path / "TEST-001.nfo"
+        result = generate_nfo(
+            number="TEST-001",
+            title="測試標題",
+            output_path=str(nfo_path),
+            rating="bad",
+        )
+        assert result is True
+        content = nfo_path.read_text(encoding="utf-8")
+        assert "<rating>" not in content
+
+    def test_generate_nfo_rating_line_valid_float_unchanged(self, tmp_path):
+        nfo_path = tmp_path / "TEST-002.nfo"
+        result = generate_nfo(
+            number="TEST-002",
+            title="測試標題",
+            output_path=str(nfo_path),
+            rating=4.5,
+        )
+        assert result is True
+        content = nfo_path.read_text(encoding="utf-8")
+        assert "<rating>9.0</rating>" in content
+
+    def test_generate_nfo_rating_line_bool_true_excluded(self, tmp_path):
+        """bool 是 int 子類；若不顯式排除，rating=True 會寫出憑空的 <rating>2.0</rating>。"""
+        nfo_path = tmp_path / "TEST-003.nfo"
+        result = generate_nfo(
+            number="TEST-003",
+            title="測試標題",
+            output_path=str(nfo_path),
+            rating=True,
+        )
+        assert result is True
+        content = nfo_path.read_text(encoding="utf-8")
+        assert "<rating>" not in content
+
+    def test_generate_nfo_rating_line_bool_false_excluded(self, tmp_path):
+        nfo_path = tmp_path / "TEST-004.nfo"
+        result = generate_nfo(
+            number="TEST-004",
+            title="測試標題",
+            output_path=str(nfo_path),
+            rating=False,
+        )
+        assert result is True
+        content = nfo_path.read_text(encoding="utf-8")
+        assert "<rating>" not in content
+
+
 # ============ download_image() 測試 ============
 
 class TestDownloadImage:

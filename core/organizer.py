@@ -860,7 +860,7 @@ def generate_nfo(
     # 63c-5（CD-63c-10）：metatube summary→<plot>，rating×2→<rating>（0-10 Jellyfin scale，
     # 僅有值才寫），<mpaa>JP-18+ 無條件寫（所有 JAV 共通）。rating_line 含 \n + 2-space 縮排，
     # 空時不留空行（embedded 在 <plot> 之前）。
-    rating_line = f"  <rating>{rating * 2:.1f}</rating>\n" if (rating is not None and rating > 0) else ""
+    rating_line = f"  <rating>{rating * 2:.1f}</rating>\n" if (isinstance(rating, (int, float)) and not isinstance(rating, bool) and rating > 0) else ""
 
     nfo_content = f'''<?xml version="1.0" encoding="utf-8"?>
 <movie>
