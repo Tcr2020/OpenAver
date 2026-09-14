@@ -27,8 +27,10 @@ from core.path_utils import to_file_uri, uri_to_fs_path, uri_to_local_fs_path, c
 from core.scraper import (
     search_jav, search_jav_single_source,
     search_javlib_versions, fetch_javlib_by_detail_url, internal_nfo_carriers,
+    smart_search, is_number_format,
 )
 from core.source_config import validate_source_id
+from core.source_settings import is_uncensored_mode_effective
 from core.cf_transport import get_cf_transport, CfChallengeRequired, CfTransportUnavailable
 from core.scrapers.javlibrary import JAVLIBRARY_ORIGIN
 from core.scrapers.fc2_javten import JAVTEN_ORIGIN
@@ -222,7 +224,11 @@ def scrape_single(request: ScrapeRequest) -> dict:
         metadata['number'] = number
     else:
         # 沒有 metadata 才重新搜尋
-        metadata = search_jav(number, proxy_url=_proxy_url)
+        if is_number_format(number):
+            results = smart_search(number, uncensored_mode=is_uncensored_mode_effective(config), proxy_url=_proxy_url)
+            metadata = dict(results[0]) if results else None
+        else:
+            metadata = search_jav(number, proxy_url=_proxy_url)
         if not metadata:
             return {
                 "success": False,
