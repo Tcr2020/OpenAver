@@ -1,6 +1,6 @@
 """
 63c-1 routing 測試：_MetatubeShim / validate_source_id / auto fan-out / explicit dispatch
-/ strip_internal_nfo_keys / API echo regression guard
+/ API echo preserves NFO carriers
 
 Mock patch target：core.scraper.metatube_state（使用端，非定義端，Gotcha §1）。
 """
@@ -14,8 +14,6 @@ from fastapi.testclient import TestClient
 from core.scraper import (
     search_jav,
     _MetatubeShim,
-    strip_internal_nfo_keys,
-    _INTERNAL_NFO_KEYS,
 )
 from core.scrapers.models import Video
 from core.scrapers.utils import SOURCE_ORDER
@@ -60,41 +58,6 @@ def _mock_state(is_connected=True, base_url="http://mt:8080", token="tok",
         token or "",
     )
     return state
-
-
-# ===========================================================================
-# 1. strip_internal_nfo_keys
-# ===========================================================================
-
-class TestStripInternalNfoKeys:
-    def test_removes_summary_and_rating(self):
-        d = {'_source': 'javbus', '_summary': 'some text', '_rating': 4.5, 'title': 'T'}
-        result = strip_internal_nfo_keys(d)
-        assert '_summary' not in result
-        assert '_rating' not in result
-
-    def test_keeps_source_mode_variant_ids(self):
-        d = {'_source': 'javbus', '_mode': 'exact', '_all_variant_ids': ['a'], '_summary': 'x'}
-        result = strip_internal_nfo_keys(d)
-        assert result['_source'] == 'javbus'
-        assert result['_mode'] == 'exact'
-        # _all_variant_ids 不在 _INTERNAL_NFO_KEYS 中 → strip 不誤刪該欄位（後方互換守衛）
-        assert result['_all_variant_ids'] == ['a']
-
-    def test_idempotent_no_internal_keys(self):
-        d = {'title': 'T', '_source': 'javbus'}
-        result = strip_internal_nfo_keys(d)
-        assert result == d
-
-    def test_returns_copy_not_same_object(self):
-        d = {'_summary': 'x', 'title': 'T'}
-        result = strip_internal_nfo_keys(d)
-        assert result is not d
-
-    def test_constant_tuple_contents(self):
-        assert '_summary' in _INTERNAL_NFO_KEYS
-        assert '_rating' in _INTERNAL_NFO_KEYS
-        assert '_source' not in _INTERNAL_NFO_KEYS
 
 
 # ===========================================================================
@@ -432,11 +395,11 @@ class TestParallelFanOutOrdering:
 
 
 # ===========================================================================
-# 6. API echo strip regression guard（integration TestClient）
+# 6. API echo preserves NFO carriers（integration TestClient）
 # ===========================================================================
 
-class TestApiEchoStrip:
-    """spec §161 enforcement：API responses must not contain _summary / _rating"""
+class TestApiEchoPreservesNfoCarriers:
+    """147c-T1：API responses must preserve _summary / _rating carriers"""
 
     @pytest.fixture
     def client(self):
@@ -455,8 +418,8 @@ class TestApiEchoStrip:
             'date': '2024-01-01',
         }
 
-    def test_get_api_search_no_internal_nfo_keys(self, client, monkeypatch):
-        """GET /api/search response body never contains _summary / _rating / summary / rating"""
+    def test_get_api_search_preserves_internal_nfo_keys(self, client, monkeypatch):
+        """GET /api/search response body preserves _summary / _rating; canonical keys absent"""
         mock_result = self._mock_search_result()
 
         # search_jav_single_source is imported inline inside the route handler,
@@ -479,14 +442,14 @@ class TestApiEchoStrip:
         items = data.get('data', [])
         assert len(items) > 0
         for item in items:
-            assert '_summary' not in item, "_summary must not appear in API response"
-            assert '_rating' not in item, "_rating must not appear in API response"
+            assert item['_summary'] == 'this must not appear'
+            assert item['_rating'] == 4.5
             # canonical keys also must not appear (to_legacy_dict excludes them, double check)
             assert 'summary' not in item
             assert 'rating' not in item
 
-    def test_post_rescrape_preview_no_internal_nfo_keys(self, client, monkeypatch):
-        """POST /api/rescrape/preview response never contains _summary / _rating"""
+    def test_post_rescrape_preview_preserves_internal_nfo_keys(self, client, monkeypatch):
+        """POST /api/rescrape/preview response preserves _summary / _rating"""
         mock_result = self._mock_search_result()
 
         with patch("web.routers.scraper.search_jav_single_source", return_value=mock_result):
@@ -503,11 +466,10 @@ class TestApiEchoStrip:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert '_summary' not in data, "_summary must not appear in rescrape/preview response"
-        assert '_rating' not in data, "_rating must not appear in rescrape/preview response"
+        assert data['_summary'] == 'this must not appear'
+        assert data['_rating'] == 4.5
         assert 'summary' not in data
         assert 'rating' not in data
-
 
 # ===========================================================================
 # 7. scanner auto coverage（smart_search → search_jav('auto') 含 metatube entry）

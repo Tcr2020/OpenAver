@@ -1353,7 +1353,7 @@ def organize_file(  # noqa: C901 — 整理主流程；Phase 2（110b）會在�
             series=metadata.get('series', ''),
             label=metadata.get('label', ''),
             # 63c-5：metadata 是 raw search_jav 結果 dict，summary/rating 走 _ 前綴 carrier
-            # （server re-search 路徑帶值；frontend-passed 路徑因 echo strip 無值 → default）
+            # （兩條路徑現在都帶值；該剝除機制已於 0.15.16 退場）
             summary=metadata.get('_summary', ''),
             rating=metadata.get('_rating'),
             external_manager=ext_mode,

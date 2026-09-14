@@ -25,7 +25,7 @@ from core.enrich_contract import did_enrich_something, enrich_success, should_pr
 from core.organizer import organize_file
 from core.path_utils import to_file_uri, uri_to_fs_path, uri_to_local_fs_path, coerce_to_file_uri
 from core.scraper import (
-    search_jav, search_jav_single_source, strip_internal_nfo_keys,
+    search_jav, search_jav_single_source,
     search_javlib_versions, fetch_javlib_by_detail_url, internal_nfo_carriers,
 )
 from core.source_config import validate_source_id
@@ -382,8 +382,8 @@ def rescrape_preview_endpoint(request: RescrapePreviewRequest) -> dict:
             if not versions:
                 return {"success": False}
             if len(versions) == 1:
-                return {"success": True, **strip_internal_nfo_keys(versions[0])}
-            return {"success": True, "candidates": [strip_internal_nfo_keys(v) for v in versions]}
+                return {"success": True, **versions[0]}
+            return {"success": True, "candidates": versions}
         elif request.source == "auto":
             result = search_jav(
                 request.number,
@@ -397,7 +397,7 @@ def rescrape_preview_endpoint(request: RescrapePreviewRequest) -> dict:
 
         if result is None:
             return {"success": False}
-        return {"success": True, **strip_internal_nfo_keys(result)}
+        return {"success": True, **result}
     except CfChallengeRequired:
         outcome = _begin_solve_for_source(request.source)
         if outcome is None:

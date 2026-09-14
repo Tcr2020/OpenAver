@@ -37,9 +37,11 @@ def test_explicit_metatube_source_wins(client, temp_config_path, monkeypatch):
     assert len(body["data"]) == 1
     item = body["data"][0]
     assert item["source"] == "metatube:FANZA"  # 整包贏（explicit 分支）
-    # spec §161 echo strip：internal carrier 不外洩
-    for k in ("_summary", "summary", "_rating", "rating"):
-        assert k not in item, f"echo 不應含 {k!r}"
+    # 147c-T1：internal carrier 保留；canonical 無底線 key 仍不出現
+    assert item["_summary"] == "plot text"
+    assert item["_rating"] == 4.0
+    assert "summary" not in item
+    assert "rating" not in item
 
 
 def test_empty_suffix_source_returns_400(client, temp_config_path):

@@ -417,6 +417,49 @@ class TestSearchStreamSSE:
         assert not any(e.get('type') == 'result-complete' for e in events), \
             "Exact mode should not send result-complete event"
 
+    def test_search_stream_preserves_internal_nfo_keys(self, client, parse_sse_events, tmp_path):
+        """147c-T1：SSE 路徑保留 _summary/_rating（result-item + result event）"""
+        mock_item = {
+            'number': 'SONE-100',
+            'title': 'Title 100',
+            'actors': ['三上悠亜'],
+            '_summary': 'plot text',
+            '_rating': 4.0,
+        }
+
+        def mock_smart_search(q, limit=20, offset=0, status_callback=None,
+                              result_callback=None, **kwargs):
+            if status_callback:
+                status_callback('javbus', 'searching')
+                status_callback('javbus', 'found:1')
+            if result_callback:
+                result_callback(-1, ['SONE-100'])
+                result_callback(0, mock_item)
+            if status_callback:
+                status_callback('done', 'found:1')
+            return [mock_item]
+
+        with patch('web.routers.search.smart_search', side_effect=mock_smart_search), \
+             patch('core.database.ActressRepository.get_by_name', return_value=None), \
+             patch('core.database.connection.get_db_path', return_value=tmp_path / "test.db"):
+            response = client.get('/api/search/stream?q=三上悠亜')
+
+        events = parse_sse_events(response.text)
+
+        item_events = [e for e in events if e.get('type') == 'result-item']
+        assert len(item_events) == 1
+        assert item_events[0]['data']['_summary'] == 'plot text'
+        assert item_events[0]['data']['_rating'] == 4.0
+        assert 'summary' not in item_events[0]['data']
+        assert 'rating' not in item_events[0]['data']
+
+        result_events = [e for e in events if e.get('type') == 'result']
+        assert len(result_events) == 1
+        assert result_events[0]['data'][0]['_summary'] == 'plot text'
+        assert result_events[0]['data'][0]['_rating'] == 4.0
+        assert 'summary' not in result_events[0]['data'][0]
+        assert 'rating' not in result_events[0]['data'][0]
+
     @pytest.fixture
     def actress_mode_events(self, client, parse_sse_events, tmp_path):
         """共用 fixture：執行 actress 模式的 smart_search 並回傳解析後的 SSE events"""
@@ -1861,8 +1904,8 @@ class TestBatchSearch:
         assert 'found' in data['summary']
         assert 'not_found' in data['summary']
 
-    def test_batch_search_strips_internal_nfo_keys(self, client, mocker):
-        """§161：_summary/_rating 不得洩漏到 batch-search response（P1 修正守衛）"""
+    def test_batch_search_preserves_internal_nfo_keys(self, client, mocker):
+        """147c-T1：_summary/_rating 保留在 batch-search response"""
         def mock_smart_search(q, limit=1, **kwargs):
             return [{
                 'number': q,
@@ -1880,10 +1923,12 @@ class TestBatchSearch:
 
         entry = data['results']['SONE-100']
         assert entry['found'] is True
-        assert '_summary' not in entry, "_summary must be stripped from batch-search response"
-        assert '_rating' not in entry, "_rating must be stripped from batch-search response"
+        assert entry['_summary'] == 'internal summary should be stripped'
+        assert entry['_rating'] == 4.5
         # Canonical fields should still be present
         assert entry['title'] == 'Found Title'
+        assert 'summary' not in entry
+        assert 'rating' not in entry
 
     def test_batch_search_dedup_numbers(self, client, mocker):
         """重複番號去重：["SONE-100", "SONE-100", "SONE-101"] 只呼叫 smart_search 兩次"""
