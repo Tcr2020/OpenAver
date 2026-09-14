@@ -21,7 +21,7 @@ from core.database import VideoRepository, organize_failures
 from core.db_inflow import try_inflow_upsert
 from core.focal_trigger import maybe_submit_video_focal
 from core.enricher import enrich_single, fetch_samples_only, resolve_nfo_cover_paths
-from core.enrich_contract import enrich_success, should_preserve_cover
+from core.enrich_contract import did_enrich_something, enrich_success, should_preserve_cover
 from core.organizer import organize_file
 from core.path_utils import to_file_uri, uri_to_fs_path, uri_to_local_fs_path, coerce_to_file_uri
 from core.scraper import (
@@ -1037,7 +1037,14 @@ async def batch_enrich_endpoint(request: BatchEnrichRequest):
                         loop = asyncio.get_running_loop()
                         status, payload = await loop.run_in_executor(None, _do_readonly)
                         if status == 'ok':
-                            success_count += 1
+                            # CD-147b-5／147b-T4：與可寫同形——fill_missing 才套四項判準；
+                            # 其他 mode 維持 success（refresh_full 可能只更新 DB）。
+                            # 今天 fill_missing 仍零行為變化（readonly nfo_written=True 無條件）。
+                            # 縮圖失效仍掛 status=='ok'。
+                            if request.mode != "fill_missing" or did_enrich_something(payload):
+                                success_count += 1
+                            else:
+                                failed_count += 1
                             # PR#114 P2: 縮圖失效是 best-effort cleanup（檔案 unlink 可拋
                             # OSError）——失敗不可讓外層 except 捕獲，否則同一成功項會
                             # success+failed 雙記、done 匯總 success+failed > total（誤報
@@ -1142,7 +1149,13 @@ async def batch_enrich_endpoint(request: BatchEnrichRequest):
                     )
                     result_dict = asdict(result)
                     if result.success:
-                        success_count += 1
+                        # CD-147b-5／147b-T4：fill_missing 才套四項判準（與前端
+                        # didEnrichSomething 同步）；其他 mode 維持 result.success
+                        # （refresh_full 可能只更新 DB）。縮圖失效仍掛 result.success。
+                        if request.mode != "fill_missing" or did_enrich_something(result):
+                            success_count += 1
+                        else:
+                            failed_count += 1
                         # feature/71 T8: 換封面成功 → 失效舊縮圖（廉價同步 unlink，不需 offload）。
                         # item.file_path 已是 DB file:/// URI → 冪等 coerce，不可 double-encode
                         # （同 enrich-single，PR #60 Codex P2）。

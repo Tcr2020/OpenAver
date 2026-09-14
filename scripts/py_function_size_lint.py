@@ -164,17 +164,26 @@ EXEMPTIONS: dict[tuple[str, str], tuple[int, str]] = {
         "（OpenAver架構評估-回應.md §七）。",
     ),
     ("web/routers/scraper.py", "batch_enrich_endpoint"): (
-        279,
+        292,
         "批次 enrich SSE 端點主流程（含 90c-T1 唯讀 guard 的 async-safe 前置計算 + 去重 + SSE "
         "response 組裝），本體大部分行數其實是巢狀的 event_generator（見下一條）；縮小 "
         "event_generator 會連帶縮小這條，目前不獨立拆分是避免把單一 request 生命週期的狀態"
         "（去重清單、唯讀前綴集）打散到多個函式增加傳遞開銷。",
     ),
     ("web/routers/scraper.py", "batch_enrich_endpoint.event_generator"): (
-        250,
+        263,
         "SSE 逐筆處理迴圈：per-item try/except、開始/進度/結束通知 emit、success/failed 計數，"
         "這是單一 SSE session 的完整生命週期；拆分會把 success_count/failed_count/去重後清單"
-        "等跨語句共享狀態打散到多個函式，可讀性不會變好。",
+        "等跨語句共享狀態打散到多個函式，可讀性不會變好。"
+        " ／ 250→265（feature/147-organize-enrich-fix T4，Codex PR review P2）：成功數改用三欄判準"
+        "（core/enrich_contract.did_enrich_something），唯讀與可寫兩條路徑各一處，否則同一輪補完會"
+        "出現兩套矛盾數字——畫面 toast 說「0 成功 1 失敗」、持久通知說「補完 1 部」。"
+        "新增 15 行裡 8 行是註解，記的是「縮圖失效為何仍掛 result.success」與「唯讀那條為何今天"
+        "零行為變化」，正是未來動這段最容易弄錯的兩件事。收成 _tally 閉包可降到 +8 但仍超標"
+        "（250+8>250），棘輪一樣要調，故選擇保留可讀性。"
+        " ／ 265→263：Codex 二次審核要求把三欄判準收斂成只在 mode==fill_missing 生效"
+        "（refresh_full 是本端點預設 mode，套上去會讓既有呼叫端誤報失敗），改成把 mode 判斷"
+        "inline 進條件而非新增變數，唯讀側註解同步精簡，淨回收 2 行——棘輪同步收緊。",
     ),
     ("core/enricher.py", "enrich_single"): (
         284,

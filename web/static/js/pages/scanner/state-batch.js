@@ -1,6 +1,8 @@
-/** TASK-147b-T3 / CD-147b-5：三欄判準——真的補到 NFO／封面／欄位才算成功。 */
+/** TASK-147b-T3 / CD-147b-5：四項判準——真的補到 NFO／封面／欄位／劇照才算成功。
+ * 與 core/enrich_contract.py 的 did_enrich_something() 同一判準；改一邊必須改另一邊。 */
 export function didEnrichSomething(event) {
-    return event.success && (event.nfo_written || event.cover_written || (event.fields_filled?.length > 0));
+    return event.success && (event.nfo_written || event.cover_written
+        || (event.fields_filled?.length > 0) || event.extrafanart_written > 0);
 }
 
 export function stateBatch() {

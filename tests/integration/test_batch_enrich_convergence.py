@@ -342,3 +342,189 @@ class TestBatchEnrichConvergence:
         assert attempted > 0
 
         assert path_uri not in missing_check_paths(client, db_path)
+
+    def test_noop_success_counts_as_failed_in_done_summary(
+        self, client, tmp_path, mocker,
+    ):
+        """CD-147b-5／147b-T4：success=True 但四項皆空（已有 .nfo、文字齊、
+        外站無封面）→ result-item.success 仍 True；done.summary 記
+        success=0／failed=1（tally 對齊前端 didEnrichSomething）。"""
+        number = "CNV-005"
+        stem = "noop_existing_nfo"
+        video_path = write_video_file(tmp_path, stem)
+        path_uri = to_file_uri(str(video_path))
+        video = make_text_complete_video(path_uri, number)
+        db_path = make_tmp_db(tmp_path, [video])
+
+        # 已有 .nfo + overwrite_existing 預設 False → nfo_written=False
+        nfo_path = video_path.with_suffix(".nfo")
+        nfo_path.write_text(
+            '<?xml version="1.0"?><movie><title>existing</title></movie>',
+            encoding="utf-8",
+        )
+
+        mocker.patch(
+            "core.enricher.search_jav",
+            return_value=scraper_hit_without_cover(number),
+        )
+
+        with patch_dual_get_db_path(db_path):
+            resp = client.post("/api/batch-enrich", json={
+                "items": [{"file_path": path_uri, "number": number}],
+                "mode": "fill_missing",
+                "write_nfo": True,
+                "write_cover": True,
+            })
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        items = [e for e in events if e.get("type") == "result-item"]
+        assert len(items) == 1
+        assert items[0]["success"] is True
+        assert items[0].get("nfo_written") is False
+        assert items[0].get("cover_written") is False
+        assert items[0].get("fields_filled") == []
+
+        done_events = [e for e in events if e.get("type") == "done"]
+        assert len(done_events) == 1
+        summary = done_events[0]["summary"]
+        assert summary["success"] == 0
+        assert summary["failed"] == 1
+
+    def test_fields_filled_only_counts_as_success_in_done_summary(
+        self, client, tmp_path, mocker,
+    ):
+        """CD-147b-5：僅 fields_filled 非空（已有 .nfo、無封面寫入）→
+        summary.success == 1（鎖住 helper 的 or fields_filled 分支）。"""
+        number = "CNV-006"
+        stem = "fields_filled_only"
+        video_path = write_video_file(tmp_path, stem)
+        path_uri = to_file_uri(str(video_path))
+        # maker 空 → _merge_meta 會填入 fields_filled=['maker']
+        video = make_text_complete_video(path_uri, number, maker="")
+        db_path = make_tmp_db(tmp_path, [video])
+
+        nfo_path = video_path.with_suffix(".nfo")
+        nfo_path.write_text(
+            '<?xml version="1.0"?><movie><title>existing</title></movie>',
+            encoding="utf-8",
+        )
+
+        mocker.patch(
+            "core.enricher.search_jav",
+            return_value=scraper_hit_without_cover(number),
+        )
+
+        with patch_dual_get_db_path(db_path):
+            resp = client.post("/api/batch-enrich", json={
+                "items": [{"file_path": path_uri, "number": number}],
+                "mode": "fill_missing",
+                "write_nfo": True,
+                "write_cover": True,
+            })
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        items = [e for e in events if e.get("type") == "result-item"]
+        assert len(items) == 1
+        assert items[0]["success"] is True
+        assert items[0].get("nfo_written") is False
+        assert items[0].get("cover_written") is False
+        assert items[0].get("fields_filled") == ["maker"]
+
+        done_events = [e for e in events if e.get("type") == "done"]
+        assert len(done_events) == 1
+        assert done_events[0]["summary"]["success"] == 1
+        assert done_events[0]["summary"]["failed"] == 0
+
+    def test_refresh_full_noop_still_counts_success_in_done_summary(
+        self, client, tmp_path, mocker,
+    ):
+        """mode gate：refresh_full 且四項皆空 → 仍 summary.success == 1
+        （嚴格判準只套 fill_missing；其他 mode 維持 result.success）。"""
+        number = "CNV-007"
+        stem = "refresh_full_noop"
+        video_path = write_video_file(tmp_path, stem)
+        path_uri = to_file_uri(str(video_path))
+        video = make_text_complete_video(path_uri, number)
+        db_path = make_tmp_db(tmp_path, [video])
+
+        nfo_path = video_path.with_suffix(".nfo")
+        nfo_path.write_text(
+            '<?xml version="1.0"?><movie><title>existing</title></movie>',
+            encoding="utf-8",
+        )
+
+        hit = scraper_hit_without_cover(number)
+        # refresh_full 由 router 預抓 search_jav，再把 scraper_data 傳進 enrich_single
+        mocker.patch("web.routers.scraper.search_jav", return_value=hit)
+        mocker.patch("core.enricher.search_jav", return_value=hit)
+
+        with patch_dual_get_db_path(db_path):
+            resp = client.post("/api/batch-enrich", json={
+                "items": [{"file_path": path_uri, "number": number}],
+                "mode": "refresh_full",
+                "write_nfo": True,
+                "write_cover": True,
+            })
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        items = [e for e in events if e.get("type") == "result-item"]
+        assert len(items) == 1
+        assert items[0]["success"] is True
+        assert items[0].get("nfo_written") is False
+        assert items[0].get("cover_written") is False
+        assert items[0].get("fields_filled") == []
+        assert items[0].get("extrafanart_written", 0) == 0
+
+        done_events = [e for e in events if e.get("type") == "done"]
+        assert len(done_events) == 1
+        assert done_events[0]["summary"]["success"] == 1
+        assert done_events[0]["summary"]["failed"] == 0
+
+    def test_extrafanart_only_counts_as_success_in_done_summary(
+        self, client, tmp_path, mocker,
+    ):
+        """CD-147b-5：僅 extrafanart_written > 0（已有 .nfo、無封面、欄位齊）→
+        summary.success == 1。"""
+        number = "CNV-008"
+        stem = "extrafanart_only"
+        video_path = write_video_file(tmp_path, stem)
+        path_uri = to_file_uri(str(video_path))
+        video = make_text_complete_video(path_uri, number)
+        db_path = make_tmp_db(tmp_path, [video])
+
+        nfo_path = video_path.with_suffix(".nfo")
+        nfo_path.write_text(
+            '<?xml version="1.0"?><movie><title>existing</title></movie>',
+            encoding="utf-8",
+        )
+
+        hit = scraper_hit_without_cover(number)
+        hit["sample_images"] = ["https://example.com/s1.jpg"]
+        mocker.patch("core.enricher.search_jav", return_value=hit)
+
+        with patch_dual_get_db_path(db_path):
+            resp = client.post("/api/batch-enrich", json={
+                "items": [{"file_path": path_uri, "number": number}],
+                "mode": "fill_missing",
+                "write_nfo": True,
+                "write_cover": True,
+                "write_extrafanart": True,
+            })
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        items = [e for e in events if e.get("type") == "result-item"]
+        assert len(items) == 1
+        assert items[0]["success"] is True
+        assert items[0].get("nfo_written") is False
+        assert items[0].get("cover_written") is False
+        assert items[0].get("fields_filled") == []
+        assert items[0].get("extrafanart_written", 0) > 0
+
+        done_events = [e for e in events if e.get("type") == "done"]
+        assert len(done_events) == 1
+        assert done_events[0]["summary"]["success"] == 1
+        assert done_events[0]["summary"]["failed"] == 0

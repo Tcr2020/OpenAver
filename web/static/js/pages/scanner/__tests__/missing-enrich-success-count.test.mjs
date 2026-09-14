@@ -1,5 +1,6 @@
-// TASK-147b-T3: CD-147b-5 三欄判準 — didEnrichSomething(event)
-// ③④ 是本條 CD 唯一的鑑別力：同樣 success=true、兩個布林都 false，只差 fields_filled。
+// TASK-147b-T3: CD-147b-5 四項判準 — didEnrichSomething(event)
+// ③④ 是本條 CD 的鑑別力：同樣 success=true、兩個布林都 false，只差 fields_filled。
+// ⑥ 鎖 extrafanart_written（掃描頁不送 write_extrafanart ⇒ 前端恆 0，形狀對齊後端）。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,5 +57,18 @@ test('success=false counts as failure regardless of other fields', () => {
       fields_filled: ['maker'],
     }),
     false,
+  );
+});
+
+test('extrafanart_written only counts as success', () => {
+  assert.equal(
+    didEnrichSomething({
+      success: true,
+      nfo_written: false,
+      cover_written: false,
+      fields_filled: [],
+      extrafanart_written: 1,
+    }),
+    true,
   );
 });
