@@ -177,7 +177,7 @@ EXEMPTIONS: dict[tuple[str, str], tuple[int, str]] = {
         "等跨語句共享狀態打散到多個函式，可讀性不會變好。",
     ),
     ("core/enricher.py", "enrich_single"): (
-        272,
+        284,
         "單片 enrich 主流程，含多個 write_* flag（nfo/cover/extrafanart/overwrite_existing/"
         "external_manager）的正交組合分支，是核心編排函式；已標記 ranker-invalidate-ok，flag "
         "組合邏輯搬到別處會打散單一事務語意。"
@@ -185,7 +185,13 @@ EXEMPTIONS: dict[tuple[str, str], tuple[int, str]] = {
         "「判定缺項」之間插入佔位標題判定（掃描把檔名塞進 videos.title，_missing_fields() 只認 falsy，"
         "title 因此永遠不進缺項清單），而判定的三個狀態（是不是佔位／原本的佔位值／今天是否本來就沒有缺項）"
         "必須跨 if missing: 區塊存活到還原那一步。抽成 helper 會把這三個狀態打散到函式邊界之外，"
-        "正是這段最容易寫錯的地方（scope 一錯，refresh_full／db_to_sidecar 兩個 mode 會 UnboundLocalError）。",
+        "正是這段最容易寫錯的地方（scope 一錯，refresh_full／db_to_sidecar 兩個 mode 會 UnboundLocalError）。"
+        " ／ 272→284（feature/147-organize-enrich-fix T1，issue #190）：缺封面也要觸發外站查詢，"
+        "於是同一段多出第四個狀態 _cover_also_missing，以及兩條「查無結果但不早退」的分支"
+        "（只因缺封面而進來、佔位標題而進來）——這兩條 source_used 停在 \"db\"，:722 的 _db_upsert "
+        "gate 不會跑，必須就地補記 scrape_attempted_at，否則那些片會永遠賴在待補清單上。"
+        "新增 12 行裡 7 行是註解，記的是「為什麼這裡要手動補記」；抽 helper 會再次撞上上一段"
+        "已經寫明的 scope 問題（現在是四個狀態不是三個），刪註解則是拿最容易寫錯的地方換行數。",
     ),
     ("core/database/video.py", "VideoRepository.repath"): (
         242,

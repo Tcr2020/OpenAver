@@ -5157,6 +5157,159 @@ class TestFillMissingPlaceholderTitle:
         assert _t1_nfo_title(video_path) == _t1_expected_title("SONE-205", "真標題")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TASK-147b-T1（CD-147b-1 / 1b / 2 / 4b）：文字齊全但缺封面也要觸發外站查詢
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFillMissingCoverAlsoMissing:
+    def test_fill_missing_text_complete_cover_missing_triggers_search(self, tmp_path):
+        """文字齊全＋缺封面＋write_cover=True＋外站有回應 → search_jav 被呼叫、
+        cover_written 依外站回應、fields_filled == []（既有文字欄位逐字未變）。"""
+        stem = "cover_missing_complete_video"
+        video_path = _t1_write_video(tmp_path, stem)
+        video = _make_video(title="使用者自己改過的標題", cover_path="")
+        mock_repo = _t1_mock_repo({"SONE-205": [video]})
+        scraper_data = _make_scraper_result(
+            title="外站標題不該覆寫",
+            cover="https://example.com/new-cover.jpg",
+        )
+
+        with (
+            patch("core.enricher.VideoRepository", return_value=mock_repo),
+            patch("core.enricher.search_jav", return_value=scraper_data) as mock_search,
+            patch("core.enricher.download_image", return_value=True),
+        ):
+            from core.enricher import enrich_single
+            result = enrich_single(
+                file_path=str(video_path),
+                number="SONE-205",
+                mode="fill_missing",
+                write_cover=True,
+                write_extrafanart=False,
+            )
+
+        mock_search.assert_called_once()
+        assert result.success is True
+        assert result.cover_written is True
+        assert result.fields_filled == []
+        assert _t1_nfo_title(video_path) == _t1_expected_title("SONE-205", "使用者自己改過的標題")
+
+    def test_fill_missing_text_complete_cover_missing_write_cover_false_no_search(self, tmp_path):
+        """同上但 write_cover=False → search_jav 不被呼叫（CD-147b-2 短路；
+        等價於既有 test_fill_missing_user_edited_title_not_overwritten 的斷言）。"""
+        stem = "cover_missing_write_cover_false"
+        video_path = _t1_write_video(tmp_path, stem)
+        video = _make_video(title="使用者自己改過的標題", cover_path="")
+        mock_repo = _t1_mock_repo({"SONE-205": [video]})
+
+        with (
+            patch("core.enricher.VideoRepository", return_value=mock_repo),
+            patch("core.enricher.search_jav") as mock_search,
+        ):
+            from core.enricher import enrich_single
+            result = enrich_single(
+                file_path=str(video_path),
+                number="SONE-205",
+                mode="fill_missing",
+                write_cover=False,
+                write_extrafanart=False,
+            )
+
+        mock_search.assert_not_called()
+        assert result.success is True
+        assert _t1_nfo_title(video_path) == _t1_expected_title("SONE-205", "使用者自己改過的標題")
+
+    def test_fill_missing_placeholder_title_cover_missing_scraper_offline_succeeds_and_records_attempted(
+        self, tmp_path,
+    ):
+        """title 佔位值＋其餘 7 欄齊全＋缺封面＋search_jav 回 None → success=True
+        （CD-145a-9 不回歸）且 repo.update_scrape_attempted_at 被呼叫一次（CD-147b-4b）。"""
+        stem = "offline_placeholder_cover_missing"
+        video_path = _t1_write_video(tmp_path, stem)
+        video = _make_video(title=stem, cover_path="")
+        mock_repo = _t1_mock_repo({"SONE-205": [video]})
+
+        with (
+            patch("core.enricher.VideoRepository", return_value=mock_repo),
+            patch("core.enricher.search_jav", return_value=None) as mock_search,
+        ):
+            from core.enricher import enrich_single
+            result = enrich_single(
+                file_path=str(video_path),
+                number="SONE-205",
+                mode="fill_missing",
+                write_cover=True,
+                write_extrafanart=False,
+            )
+
+        mock_search.assert_called_once()
+        assert result.success is True, f"CD-145a-9 不回歸，error={result.error}"
+        assert result.reason != "not_found"
+        mock_repo.update_scrape_attempted_at.assert_called_once()
+        assert _t1_nfo_title(video_path) == _t1_expected_title("SONE-205", stem)
+
+    def test_fill_missing_placeholder_title_cover_missing_write_cover_false_no_attempted(
+        self, tmp_path,
+    ):
+        """同上但 write_cover=False → repo.update_scrape_attempted_at 不被呼叫
+        （CD-147b-4b 邊界，既有行為不得擴大）。"""
+        stem = "offline_placeholder_write_cover_false"
+        video_path = _t1_write_video(tmp_path, stem)
+        video = _make_video(title=stem, cover_path="")
+        mock_repo = _t1_mock_repo({"SONE-205": [video]})
+
+        with (
+            patch("core.enricher.VideoRepository", return_value=mock_repo),
+            patch("core.enricher.search_jav", return_value=None) as mock_search,
+        ):
+            from core.enricher import enrich_single
+            result = enrich_single(
+                file_path=str(video_path),
+                number="SONE-205",
+                mode="fill_missing",
+                write_cover=False,
+                write_extrafanart=False,
+            )
+
+        mock_search.assert_called_once()
+        assert result.success is True
+        mock_repo.update_scrape_attempted_at.assert_not_called()
+        assert _t1_nfo_title(video_path) == _t1_expected_title("SONE-205", stem)
+
+    def test_fill_missing_cover_only_missing_scraper_offline_does_not_early_return(self, tmp_path):
+        """無 .nfo、文字齊全、缺封面、search_jav 回 None（非佔位標題）→ 不早退，
+        success=True、nfo_written=True、磁碟真的有 .nfo、
+        repo.update_scrape_attempted_at 被呼叫一次（CD-147b-1b）。"""
+        stem = "cover_only_offline_no_early"
+        video_path = _t1_write_video(tmp_path, stem)
+        video = _make_video(title="使用者自己改過的標題", cover_path="")
+        mock_repo = _t1_mock_repo({"SONE-205": [video]})
+
+        with (
+            patch("core.enricher.VideoRepository", return_value=mock_repo),
+            patch("core.enricher.search_jav", return_value=None) as mock_search,
+        ):
+            from core.enricher import enrich_single
+            result = enrich_single(
+                file_path=str(video_path),
+                number="SONE-205",
+                mode="fill_missing",
+                write_cover=True,
+                write_extrafanart=False,
+            )
+
+        mock_search.assert_called_once()
+        assert result.success is True, f"不得早退成 not_found，error={result.error}"
+        assert result.reason != "not_found"
+        assert result.nfo_written is True
+        nfo_path = video_path.with_suffix(".nfo")
+        assert nfo_path.is_file(), "磁碟上必須真的寫出 .nfo"
+        assert nfo_path.read_text(encoding="utf-8")
+        mock_repo.update_scrape_attempted_at.assert_called_once()
+        assert _t1_nfo_title(video_path) == _t1_expected_title("SONE-205", "使用者自己改過的標題")
+
+
 class TestIsFilenamePlaceholderTitle:
     """CD-145a-15 判定表 8 列，直接對純函式 _is_filename_placeholder_title() 驗證
     （零 mock、零 I/O）。"""
