@@ -379,6 +379,25 @@ class TestCapabilitiesEndpoint:
         assert "mode" in required and "overwrite_existing" in required
 
 
+class TestCapabilitiesDescriptionHonesty:
+    """TASK-147d-T2：scrape_single / enrich_single 來源選擇語意誠實度文字"""
+
+    def test_scrape_single_description_explains_no_metadata_source_selection(self, client):
+        data = client.get("/api/capabilities").json()
+        scrape = next(t for t in data["tools"] if t["name"] == "scrape_single")
+        desc = scrape["description"]
+        assert "完整番號格式" in desc
+        assert "不是完整番號格式" in desc
+        assert "不跨站合併" in desc
+
+    def test_enrich_single_source_description_explains_auto_default_consequence(self, client):
+        data = client.get("/api/capabilities").json()
+        tool = next(t for t in data["tools"] if t["name"] == "enrich_single")
+        desc = tool["input_schema"]["properties"]["source"]["description"]
+        assert "每個欄位各自取第一個有值的來源" in desc
+        assert "不是「整包用第一家的資料」" in desc
+
+
 class TestCapabilitiesSourceEnum:
     """TASK-61a-4：4 處 source enum 由 get_source_enum() 生成（無硬編碼）"""
 

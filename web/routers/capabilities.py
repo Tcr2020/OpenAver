@@ -83,7 +83,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "scrape_single",
-        "description": "新片整理：搜尋 metadata → 下載封面 → 生成 NFO → 重命名搬移",
+        "description": "新片整理：搜尋 metadata → 下載封面 → 生成 NFO → 重命名搬移。帶 metadata 時直接採用你給的那份，不重查來源。不帶 metadata 時：number 是完整番號格式 → 問第一家有結果的來源、整包拿，不跨站合併（與搜尋頁整理、定時整理同一套規則）；number 不是完整番號格式（打錯、傳成標題或女優名）→ 退回逐站精確查詢並跨站合併欄位，也就是今天的既有行為。想要多來源聚合，自己對每個來源各查一次 /api/search、組好 metadata 再傳進來。",
         "method": "POST",
         "path": "/api/scrape-single",
         "input_schema": {
@@ -241,7 +241,7 @@ _TOOLS: list[dict] = [
                     "type": "string",
                     "enum": get_source_enum(include_auto=True),
                     "default": "auto",
-                    "description": "刮削來源（auto=自動多源合併；指定單一來源時只打該站；dmm 需要 proxy 才能使用）",
+                    "description": "刮削來源（**預設值就是 auto**——不指定就會自動把每個欄位各自取第一個有值的來源、拼成一份，不是「整包用第一家的資料」；指定單一來源時才是整包用那家的；dmm 需要 proxy 才能使用）",
                 },
                 "javbus_lang": {
                     "type": "string",
