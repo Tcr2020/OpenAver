@@ -1,3 +1,8 @@
+/** TASK-147b-T3 / CD-147b-5：三欄判準——真的補到 NFO／封面／欄位才算成功。 */
+export function didEnrichSomething(event) {
+    return event.success && (event.nfo_written || event.cover_written || (event.fields_filled?.length > 0));
+}
+
 export function stateBatch() {
     return {
         // ===== T10: Missing NFO/Cover Enrich =====
@@ -195,7 +200,7 @@ export function stateBatch() {
                                         this._onDeckParkedAt = performance.now();  // TASK-94 Codex P1：記 park 時間，供最後一片 flush dwell 判斷
                                     }
                                 }
-                                if (event.success) {
+                                if (didEnrichSomething(event)) {
                                     this.missingEnrichSuccess++;
                                 } else {
                                     this.missingEnrichFailed++;
