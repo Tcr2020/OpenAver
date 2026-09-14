@@ -5810,3 +5810,62 @@ class TestT6PreviewNotPersisted:
         m.status_code = 200
         m.content = b'IMG' + b'\x00' * 2000
         return m
+
+
+class TestOrganizeFileSummaryRating:
+    """T3 端到端證據：organize_file() 收到 _summary/_rating 時，NFO 確實寫出對應內容（或維持空白）。"""
+
+    def test_organize_file_summary_rating_written_to_nfo_when_source_has_values(self, tmp_path):
+        src = tmp_path / 'ABC-777.mp4'
+        src.write_bytes(b'v' * 100)
+        metadata = {
+            'number': 'ABC-777', 'title': 'T', 'actors': [], 'tags': [],
+            'date': '2024-01-01', 'maker': 'M', 'director': 'D', 'series': 'S',
+            'label': 'L', 'duration': 120, 'url': 'https://example/detail',
+            '_summary': 'A great movie plot summary.',
+            '_rating': 4.5,
+        }
+        config = {'output_dir': str(tmp_path / 'out'), 'create_folder': True}
+        result = organize_file(str(src), metadata, config)
+        assert result['success'] is True
+        nfo_path = result.get('nfo_path')
+        assert nfo_path
+        content = open(nfo_path, encoding='utf-8').read()
+        assert '<plot>A great movie plot summary.</plot>' in content
+        assert '<rating>9.0</rating>' in content
+
+    def test_organize_file_summary_rating_blank_when_source_has_no_values(self, tmp_path):
+        src = tmp_path / 'XYZ-999.mp4'
+        src.write_bytes(b'v' * 100)
+        metadata = {
+            'number': 'XYZ-999', 'title': 'T2', 'actors': [], 'tags': [],
+            'date': '2024-01-01', 'maker': 'M', 'director': 'D', 'series': 'S',
+            'label': 'L', 'duration': 120, 'url': 'https://example/detail',
+            '_summary': '',
+            '_rating': None,
+        }
+        config = {'output_dir': str(tmp_path / 'out'), 'create_folder': True}
+        result = organize_file(str(src), metadata, config)
+        assert result['success'] is True
+        nfo_path = result.get('nfo_path')
+        content = open(nfo_path, encoding='utf-8').read()
+        assert '<plot></plot>' in content
+        assert '<rating>' not in content
+
+
+class TestVideosSchemaHasNoNfoCarrierColumns:
+    """T3 案例 c：videos 表結構性不含 summary/rating 欄位（CD-147c-3 的機械化版本）。"""
+
+    def test_videos_table_schema_has_no_nfo_carrier_columns(self, tmp_path):
+        import sqlite3
+        from core.database.connection import init_db
+
+        db_path = tmp_path / 'schema_probe_147c.db'
+        init_db(db_path)
+        with sqlite3.connect(str(db_path)) as conn:
+            cols = [r[1] for r in conn.execute('PRAGMA table_info("videos")')]
+        for forbidden in ('summary', 'rating'):
+            assert forbidden not in cols, (
+                f'videos 表出現了 {forbidden!r} 欄位——_summary/_rating 是搜尋結果的 NFO carrier，'
+                f'結構性不應該進 DB（spec §3.3），這是它第一次可能被誤加的機械警報'
+            )
