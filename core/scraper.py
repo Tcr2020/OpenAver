@@ -128,10 +128,7 @@ def expand_partial_number(partial: str) -> List[str]:
     return candidates
 
 
-# ============ 63c metatube internal carrier keys + strip helper ============
-
-_INTERNAL_NFO_KEYS = ('_summary', '_rating')
-
+# ============ 63c metatube internal carrier keys ============
 
 def internal_nfo_carriers(video) -> dict:
     """search_jav 注入、to_legacy_dict 刻意省略的內部 NFO carrier（_summary / _rating）。
@@ -139,18 +136,9 @@ def internal_nfo_carriers(video) -> dict:
     NFO writer 的 <plot>/<rating> 吃這組 `_` 前綴 carrier（見 enricher._scraper_to_meta），
     DB 不收。detail_url 預餵路徑（confirm 多版本）跳過 search_jav，需補同一組以對齊既有
     javlibrary 重刮的 NFO 輸出，否則 NFO 評分/簡介會掉（CD-63c-5 / PR #89 Codex P2）。
-    key 集合必須與 _INTERNAL_NFO_KEYS 一致。
+    key 集合是 `_summary` / `_rating`。
     """
     return {'_summary': video.summary, '_rating': video.rating}
-
-
-def strip_internal_nfo_keys(result_dict: dict) -> dict:
-    """移除 internal NFO carrier 鍵（_summary / _rating），回傳 shallow copy。
-
-    保留 _source / _mode / _all_variant_ids 等前端所需 _ 前綴鍵。
-    （spec §161 enforcement，CD-63c-5）
-    """
-    return {k: v for k, v in result_dict.items() if k not in _INTERNAL_NFO_KEYS}
 
 
 # ============ 63c _MetatubeShim（CD-63c-3）============

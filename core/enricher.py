@@ -601,7 +601,10 @@ def enrich_single(  # ranker-invalidate-ok: (no literal SQL here; corpus writes 
             meta['title'] = ''
 
         missing = _missing_fields(meta)
-        if missing:
+        # CD-147b-1：缺封面也觸發外站查詢；不進 _missing_fields() 本體，避免污染
+        # :600 的 _title_only_synthetic_missing 判定（CD-145a-9）。
+        _cover_also_missing = write_cover and not meta.get("cover_url")
+        if missing or _cover_also_missing:
             if scraper_data is None:
                 scraper_data = search_jav(number, proxy_url=proxy_url,
                                           source=source or 'auto', javbus_lang=javbus_lang)
@@ -612,6 +615,15 @@ def enrich_single(  # ranker-invalidate-ok: (no literal SQL here; corpus writes 
                     # 造成的回歸（今天這一列本來就會成功）。還原佔位標題，走原本的
                     # 寫入路徑（NFO 從 DB 現值重寫，與今天逐值相同）。
                     meta['title'] = _placeholder_title
+                    # CD-147b-4b：佔位標題＋缺封面＋外站查無 → source_used 停在
+                    # "db"，:722 gate 不會寫 scrape_attempted_at；僅當真的缺封面
+                    # 時手動補記（write_cover=False 維持既有「不記」）。
+                    if _cover_also_missing:
+                        repo.update_scrape_attempted_at(to_file_uri(fs_path_for_db), time.time())  # db-ns-ok: fs_path_for_db, DB round-trip value, no reverse mapping applied
+                elif not missing:
+                    # CD-147b-1b：只因缺封面進來（文字欄齊），刮不到不算真缺資料——
+                    # 不早退，落下去走原本寫入路徑；source_used 停在 "db"，手動補記。
+                    repo.update_scrape_attempted_at(to_file_uri(fs_path_for_db), time.time())  # db-ns-ok: fs_path_for_db, DB round-trip value, no reverse mapping applied
                 else:
                     # missing 本來就有 title 以外的缺項：早退行為與今天完全一致
                     repo.update_scrape_attempted_at(to_file_uri(fs_path_for_db), time.time())  # db-ns-ok: fs_path_for_db, DB round-trip value, no reverse mapping applied

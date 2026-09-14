@@ -1,3 +1,16 @@
+/** TASK-147b-T3 / CD-147b-5：四項判準——真的補到 NFO／封面／欄位／劇照才算成功。
+ * 與 core/enrich_contract.py 的 did_enrich_something() 同一判準；改一邊必須改另一邊。
+ *
+ * ⚠️ 後端多一道 mode 閘（web/routers/scraper.py:1051／1162 的
+ * `request.mode != "fill_missing" or did_enrich_something(...)`），這裡沒有——
+ * 因為今天唯一的呼叫端只送 fill_missing（本檔 :115）。**若日後多出一個送
+ * refresh_full 的呼叫端，兩邊會再次分家**（toast 與完成摘要各說一套數字，
+ * 正是 147b 修掉的那個病），屆時這裡也要補上同一道 mode 判斷。 */
+export function didEnrichSomething(event) {
+    return event.success && (event.nfo_written || event.cover_written
+        || (event.fields_filled?.length > 0) || event.extrafanart_written > 0);
+}
+
 export function stateBatch() {
     return {
         // ===== T10: Missing NFO/Cover Enrich =====
@@ -171,7 +184,11 @@ export function stateBatch() {
                                 this.currentCard = { number: event.number, status: 'searching', source: '', reason: '', coverSrc: '' };
                             } else if (event.type === 'result-item') {
                                 // badge 在 handler 本體算，與動畫（T5 playInboundFly）解耦（G-5）
-                                if (event.nfo_written || event.cover_written) {
+                                // pre-merge SA-pre-9 P3-4：改用與成功數同一個判準。147b-T3 把成功數
+                                // 放寬成四欄卻沒動這裡，只補到 fields_filled 的片會「算成功但 badge 不加」，
+                                // 兩個數字同畫面對不起來。下面那條飛入動畫的 gate 刻意維持兩欄——
+                                // 沒有新封面就沒有東西可以飛，那是另一回事。
+                                if (didEnrichSomething(event)) {
                                     this.enrichBadgeCount++;
                                 }
                                 if (this.currentCard) {
@@ -195,7 +212,7 @@ export function stateBatch() {
                                         this._onDeckParkedAt = performance.now();  // TASK-94 Codex P1：記 park 時間，供最後一片 flush dwell 判斷
                                     }
                                 }
-                                if (event.success) {
+                                if (didEnrichSomething(event)) {
                                     this.missingEnrichSuccess++;
                                 } else {
                                     this.missingEnrichFailed++;

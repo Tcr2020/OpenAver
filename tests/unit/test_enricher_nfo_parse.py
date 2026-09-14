@@ -171,6 +171,13 @@ def _run_fill_missing(mp4_path, number: str, *, db_hit: bool = False):
             file_path=str(mp4_path),
             number=number,
             mode="fill_missing",
+            # CD-147b-1 新增「缺封面也觸發外站查詢」（core/enricher.py:606
+            # _cover_also_missing = write_cover and not meta.get("cover_url")）
+            # 與本組測試的主題（NFO 欄位完整性判斷 / DB 命中不進 NFO 分支）無關
+            # 的變因：_nfo_to_meta 的 cover_url 是寫死的 ""（core/enricher.py:74），
+            # fixture 端無法讓它非空，只能靠 write_cover=False 讓 _cover_also_missing
+            # 恆為 False，把測試拉回原本只驗「欄位缺不缺會不會觸發刮削」的主題。
+            write_cover=False,
         )
 
     return result, mock_search, spy_nfo_to_meta, mock_repo
@@ -301,6 +308,14 @@ class TestBlankActorOrGenreTriggersScrape:
                 file_path=str(mp4_path),
                 number=number,
                 mode="fill_missing",
+                # 與 _run_fill_missing() 同一個理由（見該處註解）：CD-147b-1 的
+                # _cover_also_missing 在 fixture 無封面時恆為真，會讓
+                # assert_called_once() 不管欄位缺不缺都通過——正向鎖變恆真。
+                # write_cover=False 把它關掉，這組測試才真的在驗「某欄空白會
+                # 觸發刮削」。實測：拿掉這一行之後，把 core/enricher.py:607 的
+                # `if missing or _cover_also_missing:` 改成 `if _cover_also_missing:`
+                # 整支檔案仍 22 passed（SURVIVED）。
+                write_cover=False,
             )
 
         mock_search.assert_called_once()

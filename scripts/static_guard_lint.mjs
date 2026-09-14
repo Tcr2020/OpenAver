@@ -4935,6 +4935,25 @@ const RULES = [
     ifPresent: 'errorKind: this.errorKind', thenRequire: 'this.errorKind = snap.errorKind',
     note: 'errorKind pairing: _searchSnapshot 有 errorKind 但 cancelSearch() 未還原',
   },
+
+  // ---- [TASK-147b-T3 / CD-147b-5b] state-batch.js 三欄判準接線守衛 ----
+  // ① result-item handler 必須真的呼叫 didEnrichSomething（node:test 證明不了接線）
+  // ② didEnrichSomething 本體必須含 fields_filled（擋判準退回兩欄動畫那一套）
+  // 兩條各自獨立轉紅：註解呼叫行只紅①；拿掉 fields_filled 分支只紅②。
+  {
+    file: 'web/static/js/pages/scanner/state-batch.js', kind: 'required-string',
+    pattern: 'didEnrichSomething(',
+    scope: { anchor: /else if \(event\.type === 'result-item'\) \{/, braceBalanced: true },
+    stripLineComments: true,
+    note: '[TASK-147b-T3 CD-147b-5b] result-item handler 必須呼叫 didEnrichSomething(（接線守衛）',
+  },
+  {
+    file: 'web/static/js/pages/scanner/state-batch.js', kind: 'required-string',
+    pattern: 'fields_filled',
+    scope: { anchor: /export function didEnrichSomething\s*\([^)]*\)\s*\{/, braceBalanced: true },
+    stripLineComments: true,
+    note: '[TASK-147b-T3 CD-147b-5b] didEnrichSomething 本體必須含 fields_filled（三欄判準不得退回兩欄）',
+  },
 ];
 
 // ---- helpers ----

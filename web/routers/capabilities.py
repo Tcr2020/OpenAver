@@ -83,7 +83,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "scrape_single",
-        "description": "新片整理：搜尋 metadata → 下載封面 → 生成 NFO → 重命名搬移",
+        "description": "新片整理：搜尋 metadata → 下載封面 → 生成 NFO → 重命名搬移。帶 metadata 時直接採用你給的那份，不重查來源。不帶 metadata 時：number 是完整番號格式 → 問第一家有結果的來源、整包拿，不跨站合併（與搜尋頁整理、定時整理同一套規則）；number 不是完整番號格式（打錯、傳成標題或女優名）→ 退回逐站精確查詢並跨站合併欄位，也就是今天的既有行為（無碼模式開啟時例外：改問無碼來源白名單、命中第一家即回，與定時整理一致）。想要多來源聚合，自己對每個來源各查一次 /api/search、組好 metadata 再傳進來。",
         "method": "POST",
         "path": "/api/scrape-single",
         "input_schema": {
@@ -200,8 +200,13 @@ _TOOLS: list[dict] = [
                         "允許欄位：title/original_title/actors/maker/director/series/label/tags/date/duration/"
                         "cover/preview_cover_url/preview_sample_images/url/sample_images/_summary/_rating。"
                         "換封面須顯式帶 write_cover=true（本欄位存在時，write_cover 預設改為 false）。"
-                        "_summary（簡介）與 _rating（評分）可以寫入，即使你讀不到既有值也可以送一份新的——"
-                        "但兩者都不會被任何查詢端點回顯給你，所以你沒辦法先讀現值再決定要不要改。"
+                        "_summary／_rating 存不存在，看你手上那筆結果字典本身的 key，不要用搜尋模式名稱猜："
+                        "凡是經過 core.scraper.search_jav 組出來的結果，兩個 key 一定都在（值可能是空字串"
+                        "或 None，但 key 存在）——精確番號搜尋、partial／prefix 局部搜尋、javbus 關鍵字/女優"
+                        "模糊搜尋都經過它。不經過它、直接用 to_legacy_dict() 組裝的結果就完全不會有這兩個"
+                        "key（目前已知：DMM 關鍵字搜尋、javlibrary 多版本清單、jav321 關鍵字 fallback）。"
+                        "拿到後可整包送 scrape_single（零驗證）；但 enrich_single 有嚴格白名單，未知欄位會 400。"
+                        "這部片目前 NFO 裡的值仍然讀不到（DB 不收這兩欄）；未帶時後端沿用既有 NFO 這條規則不變。"
                         "⚠️ _rating 是 0-5 刻度（不是 Jellyfin 那種 0-10），後端會自動 ×2 存進 NFO；"
                         "送 8.0 會寫出 16.0，不是你以為的『10 分制打 8 分』。"
                         "⚠️ original_title 送空字串會被拒絕（400）——這一欄沒有受支援的清空途徑，"
@@ -239,7 +244,7 @@ _TOOLS: list[dict] = [
                     "type": "string",
                     "enum": get_source_enum(include_auto=True),
                     "default": "auto",
-                    "description": "刮削來源（auto=自動多源合併；指定單一來源時只打該站；dmm 需要 proxy 才能使用）",
+                    "description": "刮削來源（**預設值就是 auto**——不指定就會自動把每個欄位各自取第一個有值的來源、拼成一份，不是「整包用第一家的資料」；指定單一來源時才是整包用那家的；dmm 需要 proxy 才能使用）",
                 },
                 "javbus_lang": {
                     "type": "string",

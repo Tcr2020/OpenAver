@@ -783,6 +783,54 @@ def download_image(
     return _attempt_download_image(fallback_url, save_path, referer)
 
 
+# NFO-CTRL-01（PR #191 CodeRabbit F1/加固；BE-GUARD-01：閘門寫在 sink，不寫在上游白名單）：
+# XML 1.0 合法字元只有 \t(0x09) \n(0x0A) \r(0x0D) 與 0x20 以上（另排除 surrogate 區段
+# 0xD800–0xDFFF 與 0xFFFE/0xFFFF）。含裸控制字元（\x07/\x0b/\x0c/\x1b/\x00 等）的欄位值
+# 目前會讓 generate_nfo() 寫出成功（回 True）但整份 XML 解析失敗——ET.parse 與
+# core.nfo_updater.parse_nfo 都讀不到任何欄位，Jellyfin/Kodi/OpenAver 自己全部看不到。
+# 這是既有病（core/enricher.py:528 批次補完／進階重刮早就會把 _summary 寫進 <plot>），
+# 本次一併在唯一 sink（generate_nfo）收斂，不分兩處補。
+_ILLEGAL_XML_CHARS_RE = re.compile(
+    '[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]'
+)
+
+
+def _strip_illegal_xml_chars(value):
+    """剝除字串裡 XML 1.0 不合法的字元，保留 \\t/\\n/\\r（簡介換行不可被吃掉）。
+
+    **非字串一律先收斂成字串**（`None` → `''`，其餘 → `str(value)`）。理由與
+    147c-T2 的 `<rating>` 型別防護同一條（BE-GUARD-01：閘門寫在 sink）：
+    `POST /api/scrape-single` 對 `metadata` **零驗證**（`web/routers/scraper.py:222`，
+    與 `enrich_single` 的嚴格白名單不對稱），AI 送 `{"_summary": null}` 進來時
+    `metadata.get('_summary', '')` 會回 `None`（key 存在，default 不生效），
+    而 `generate_nfo()` 在 `atomic_move()` **之後**才跑 —— `html.escape(None)` 拋
+    `AttributeError` 會讓畫面顯示「整理失敗」，但影片檔其實已經改名搬走了。
+    CodeRabbit PR #191 的 P2 提對了這條鏈，只是把觸發前提歸給 scraper 端
+    （`Video.summary` 是 `str = Field(default='')` 且 frozen，那半確實不可能）。
+    """
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        value = str(value)
+    return _ILLEGAL_XML_CHARS_RE.sub('', value)
+
+
+def _clean_xml_str_list(value):
+    """把「應該是字串清單」的參數收斂成乾淨的 list[str]，非清單一律回 `[]`。
+
+    與 `_strip_illegal_xml_chars()` 同一條理由（BE-GUARD-01：閘門寫在 sink），
+    但守的是**容器型別**而不是元素內容：`POST /api/scrape-single` 對 `metadata`
+    零驗證，送 `{"user_tags": 123}` 進來時 `core/organizer.py` 是在
+    **`atomic_move()` 之後**才取出 user_tags 交給 `generate_nfo()`，而
+    `user_tags or []` 會原樣保留非零整數 ⇒ 迭代整數拋 `TypeError`
+    ⇒ 又是「畫面說整理失敗、但影片檔已經搬走」。
+    bare `str` 也會被擋掉（否則會被逐字元迭代成一堆單字元 tag）。
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [_strip_illegal_xml_chars(v) for v in value]
+
+
 def generate_nfo(
     number: str,
     title: str,
@@ -833,10 +881,33 @@ def generate_nfo(
     actors = actors or []
     tags = tags or []
     user_tags = user_tags or []
+
+    # NFO-CTRL-01：sink 端統一剝除 XML 不合法控制字元（見上方模組層註解），
+    # 涵蓋所有會被寫進本份 NFO 的字串欄位；非字串（如 None）原樣通過。
+    number = _strip_illegal_xml_chars(number)
+    title = _strip_illegal_xml_chars(title)
+    original_title = _strip_illegal_xml_chars(original_title)
+    date = _strip_illegal_xml_chars(date)
+    maker = _strip_illegal_xml_chars(maker)
+    url = _strip_illegal_xml_chars(url)
+    director = _strip_illegal_xml_chars(director)
+    series = _strip_illegal_xml_chars(series)
+    label = _strip_illegal_xml_chars(label)
+    summary = _strip_illegal_xml_chars(summary)
+    actors = _clean_xml_str_list(actors)
+    tags = _clean_xml_str_list(tags)
+    user_tags = _clean_xml_str_list(user_tags)
+
     year = date[:4] if date else ''
 
     # 封面檔名（不含副檔名）
-    basename = os.path.splitext(os.path.basename(output_path))[0]
+    # NFO-CTRL-01b：basename 衍生自 output_path，而 sanitize_filename()（:47）只移除
+    # Windows 禁用符號，BEL/ESC 之類控制字元穿得過去 ⇒ 帶控制字元的 title 會讓影片被搬到
+    # 帶控制字元的檔名，再由 basename 把同一個字元寫回 <poster>/<thumb>/<fanart>。
+    # title 那一格淨化了也沒用，整份 XML 還是壞的，所以這裡要再過一次。
+    basename = _strip_illegal_xml_chars(
+        os.path.splitext(os.path.basename(output_path))[0]
+    )
 
     # 顯示標題（belt-and-suspenders：剝除前置番號前綴後組 display_title，B2 FIX B CD-c7）
     _t = title or original_title
@@ -854,13 +925,20 @@ def generate_nfo(
     set_tag = (
         f"<set><name>{html.escape(series)}</name></set>" if series else "<set></set>"
     )
-    runtime_tag = f"<runtime>{duration}</runtime>" if duration is not None else "<runtime></runtime>"
+    # NFO-CTRL-01c：<runtime> 是全函式唯一的裸插值（見 TestGenerateNfoNoUnescapedInterpolation
+    # 的窮舉守衛）。`duration: Optional[int]` 只是宣告——`POST /api/scrape-single` 對
+    # metadata 零驗證（`web/routers/scraper.py:222`），送 {"duration": "1&2"} 進來會在
+    # **atomic_move() 之後**（`core/organizer.py:1423` 取值）寫出 `<runtime>1&2</runtime>`：
+    # 函式回 True，但整份 NFO 解析失敗。契約逐字比照 enrich_single 的 duration 驗證
+    # （`web/routers/scraper.py:515-517`：整數或 null），非整數一律當成「沒有」。
+    _duration = duration if (isinstance(duration, int) and not isinstance(duration, bool)) else None
+    runtime_tag = f"<runtime>{_duration}</runtime>" if _duration is not None else "<runtime></runtime>"
     director_tag = f"<director>{html.escape(director)}</director>" if director else "<director></director>"
     label_tag = f"<label>{html.escape(label)}</label>"
     # 63c-5（CD-63c-10）：metatube summary→<plot>，rating×2→<rating>（0-10 Jellyfin scale，
     # 僅有值才寫），<mpaa>JP-18+ 無條件寫（所有 JAV 共通）。rating_line 含 \n + 2-space 縮排，
     # 空時不留空行（embedded 在 <plot> 之前）。
-    rating_line = f"  <rating>{rating * 2:.1f}</rating>\n" if (rating is not None and rating > 0) else ""
+    rating_line = f"  <rating>{rating * 2:.1f}</rating>\n" if (isinstance(rating, (int, float)) and not isinstance(rating, bool) and rating > 0) else ""
 
     nfo_content = f'''<?xml version="1.0" encoding="utf-8"?>
 <movie>
@@ -1353,7 +1431,7 @@ def organize_file(  # noqa: C901 — 整理主流程；Phase 2（110b）會在�
             series=metadata.get('series', ''),
             label=metadata.get('label', ''),
             # 63c-5：metadata 是 raw search_jav 結果 dict，summary/rating 走 _ 前綴 carrier
-            # （server re-search 路徑帶值；frontend-passed 路徑因 echo strip 無值 → default）
+            # （兩條路徑現在都帶值；該剝除機制已於 0.15.16 退場）
             summary=metadata.get('_summary', ''),
             rating=metadata.get('_rating'),
             external_manager=ext_mode,

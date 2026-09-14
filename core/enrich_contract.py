@@ -28,6 +28,16 @@ class EnrichResult:
     reason: Optional[str] = None
 
 
+def did_enrich_something(result: EnrichResult) -> bool:
+    """這一筆到底有沒有真的補到東西（CD-147b-5 的四項判準，Python 側）。
+
+    與 web/static/js/pages/scanner/state-batch.js 的 didEnrichSomething() 同一判準
+    （nfo／cover／fields_filled／extrafanart）；改一邊必須改另一邊。
+    """
+    return bool(result.success and (result.nfo_written or result.cover_written
+                                    or result.fields_filled or result.extrafanart_written))
+
+
 def enrich_success(*, nfo_written, cover_written, extrafanart_written,
                    fields_filled, source_used,
                    has_servable_cover=None, reason=None) -> EnrichResult:

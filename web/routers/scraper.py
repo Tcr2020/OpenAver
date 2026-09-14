@@ -21,14 +21,16 @@ from core.database import VideoRepository, organize_failures
 from core.db_inflow import try_inflow_upsert
 from core.focal_trigger import maybe_submit_video_focal
 from core.enricher import enrich_single, fetch_samples_only, resolve_nfo_cover_paths
-from core.enrich_contract import enrich_success, should_preserve_cover
+from core.enrich_contract import did_enrich_something, enrich_success, should_preserve_cover
 from core.organizer import organize_file
 from core.path_utils import to_file_uri, uri_to_fs_path, uri_to_local_fs_path, coerce_to_file_uri
 from core.scraper import (
-    search_jav, search_jav_single_source, strip_internal_nfo_keys,
+    search_jav, search_jav_single_source,
     search_javlib_versions, fetch_javlib_by_detail_url, internal_nfo_carriers,
+    smart_search, is_number_format,
 )
 from core.source_config import validate_source_id
+from core.source_settings import is_uncensored_mode_effective
 from core.cf_transport import get_cf_transport, CfChallengeRequired, CfTransportUnavailable
 from core.scrapers.javlibrary import JAVLIBRARY_ORIGIN
 from core.scrapers.fc2_javten import JAVTEN_ORIGIN
@@ -222,7 +224,12 @@ def scrape_single(request: ScrapeRequest) -> dict:
         metadata['number'] = number
     else:
         # 沒有 metadata 才重新搜尋
-        metadata = search_jav(number, proxy_url=_proxy_url)
+        uncensored_mode = is_uncensored_mode_effective(config)
+        if is_number_format(number) or uncensored_mode:
+            results = smart_search(number, uncensored_mode=uncensored_mode, proxy_url=_proxy_url)
+            metadata = dict(results[0]) if results else None
+        else:
+            metadata = search_jav(number, proxy_url=_proxy_url)
         if not metadata:
             return {
                 "success": False,
@@ -382,8 +389,8 @@ def rescrape_preview_endpoint(request: RescrapePreviewRequest) -> dict:
             if not versions:
                 return {"success": False}
             if len(versions) == 1:
-                return {"success": True, **strip_internal_nfo_keys(versions[0])}
-            return {"success": True, "candidates": [strip_internal_nfo_keys(v) for v in versions]}
+                return {"success": True, **versions[0]}
+            return {"success": True, "candidates": versions}
         elif request.source == "auto":
             result = search_jav(
                 request.number,
@@ -397,7 +404,7 @@ def rescrape_preview_endpoint(request: RescrapePreviewRequest) -> dict:
 
         if result is None:
             return {"success": False}
-        return {"success": True, **strip_internal_nfo_keys(result)}
+        return {"success": True, **result}
     except CfChallengeRequired:
         outcome = _begin_solve_for_source(request.source)
         if outcome is None:
@@ -1037,7 +1044,14 @@ async def batch_enrich_endpoint(request: BatchEnrichRequest):
                         loop = asyncio.get_running_loop()
                         status, payload = await loop.run_in_executor(None, _do_readonly)
                         if status == 'ok':
-                            success_count += 1
+                            # CD-147b-5／147b-T4：與可寫同形——fill_missing 才套四項判準；
+                            # 其他 mode 維持 success（refresh_full 可能只更新 DB）。⚠️ 前端
+                            # didEnrichSomething() 沒有這道 mode 閘，多出 refresh_full 呼叫端時兩邊一起補。
+                            # 今天 fill_missing 零行為變化（readonly nfo_written=True 無條件）；縮圖失效仍掛 ok。
+                            if request.mode != "fill_missing" or did_enrich_something(payload):
+                                success_count += 1
+                            else:
+                                failed_count += 1
                             # PR#114 P2: 縮圖失效是 best-effort cleanup（檔案 unlink 可拋
                             # OSError）——失敗不可讓外層 except 捕獲，否則同一成功項會
                             # success+failed 雙記、done 匯總 success+failed > total（誤報
@@ -1142,7 +1156,13 @@ async def batch_enrich_endpoint(request: BatchEnrichRequest):
                     )
                     result_dict = asdict(result)
                     if result.success:
-                        success_count += 1
+                        # CD-147b-5／147b-T4：fill_missing 才套四項判準（與前端 didEnrichSomething
+                        # 同步；⚠️ 前端沒有這道 mode 閘，多出 refresh_full 呼叫端時兩邊一起補）；
+                        # 其他 mode 維持 result.success（refresh_full 可能只更新 DB）。縮圖失效仍掛之。
+                        if request.mode != "fill_missing" or did_enrich_something(result):
+                            success_count += 1
+                        else:
+                            failed_count += 1
                         # feature/71 T8: 換封面成功 → 失效舊縮圖（廉價同步 unlink，不需 offload）。
                         # item.file_path 已是 DB file:/// URI → 冪等 coerce，不可 double-encode
                         # （同 enrich-single，PR #60 Codex P2）。
