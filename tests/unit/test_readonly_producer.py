@@ -4558,6 +4558,48 @@ class TestWriteMovieAssetsContainment:
         assert src_before == src_after, "read-only source dir must not be written to"
         repo.upsert.assert_called_once()
 
+    def test_unc_bare_share_root_movie_dir_allowed(self, monkeypatch):
+        """UNC bare share root output_root：movie_dir 在同一共用根底下時必須放行。
+
+        TASK-147a-T2 / CD-147a-7：直接呼叫 _produce_one() 的 containment checkpoint
+        （mock _resolve_movie_dir 回傳值，不跑完整 allocate loop），用 Windows-style
+        mock harness 真的驅動 is_fs_path_under_dir——不得 mock 該函式本身。
+        斷言不再 raise RuntimeError，且 _write_movie_assets 有被呼叫到。
+        """
+        import ntpath
+        import types
+        import core.path_utils as path_utils
+        from core.readonly_producer import _produce_one
+        from tests.unit.test_path_utils import _PartialOsPathProxy
+
+        fake_os = types.SimpleNamespace(path=_PartialOsPathProxy(
+            realpath=ntpath.realpath,
+            normcase=ntpath.normcase,
+            sep=ntpath.sep,
+        ))
+        monkeypatch.setattr(path_utils, 'os', fake_os)
+
+        output_root = r'\\server\share'
+        movie_dir = r'\\server\share\ABC-001'
+        meta = dict(_T3_META, number='ABC-001')
+        file_info = {'path': '/src/ABC-001.mp4', 'size': 1_000_000, 'mtime': 1.0}
+        repo = MagicMock()
+
+        with patch('core.readonly_producer._resolve_movie_dir',
+                   return_value=(movie_dir, 'file:///whatever-db-uri')), \
+             patch('core.readonly_producer._write_movie_assets',
+                   return_value={'nfo_mtime': 1.0, 'cover_fs': '', 'sample_fs': []}) as mock_write, \
+             patch('core.readonly_producer._upsert_db'):
+            _produce_one(
+                repo, MagicMock(), dict(_T3_BASE_CONFIG, external_manager='jellyfin'),
+                file_info=file_info, meta=meta, cover_strategy=_cover_strategy_for(meta),
+                assets_mode='full', existing=None,
+                output_root=output_root, output_uri='file:///unc-dummy',
+                allocated_this_run=set(), path_mappings={},
+            )
+
+        mock_write.assert_called_once()
+
 
 class TestProduceOneContainmentCheckpoint:
     """TASK-110b-T5 (CD-110b-2/CD-110b-8): the containment checkpoint lives in

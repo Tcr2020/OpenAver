@@ -5445,6 +5445,27 @@ class TestOrganizeContainment:
         assert target.exists()
         assert not src.exists()
 
+    def test_unc_bare_share_root_allowed(self, monkeypatch):
+        """UNC bare share root：\\\\server\\share 底下的 candidate 必須放行。
+
+        TASK-147a-T2 / CD-147a-7：直接驅動 _containment_error()，用 Windows-style
+        mock harness（ntpath realpath/normcase/sep）真的走到 is_fs_path_under_dir
+        的前綴比對——不得 mock is_fs_path_under_dir 本身。
+        """
+        import ntpath
+        import types
+        import core.path_utils as path_utils
+        from core.organizer import _containment_error
+        from tests.unit.test_path_utils import _PartialOsPathProxy
+
+        fake_os = types.SimpleNamespace(path=_PartialOsPathProxy(
+            realpath=ntpath.realpath,
+            normcase=ntpath.normcase,
+            sep=ntpath.sep,
+        ))
+        monkeypatch.setattr(path_utils, 'os', fake_os)
+        assert _containment_error(r'\\server\share\x', r'\\server\share') is None
+
 
 # ============ TASK-126-T4b：代理網址走到 organize 的下載點 ============
 #
