@@ -518,8 +518,8 @@ def is_path_under_dir(path: str, dir_uri: str) -> bool:
 
 
 def is_fs_path_under_dir(fs_path: str, root_fs_path: str) -> bool:
-    """
-    判斷原生 FS path 是否在指定根目錄底下（CD-110b-4 五步鏈）。
+    r"""
+    判斷原生 FS path 是否在指定根目錄底下。
 
     與 is_path_under_dir(path, dir_uri) 的職責分界：
     - is_path_under_dir：吃 file:/// URI，純字串前綴比對，不解析 `..`、不解析
@@ -537,11 +537,14 @@ def is_fs_path_under_dir(fs_path: str, root_fs_path: str) -> bool:
            target_dir 在檢查當下本來就可能尚未建立。
         2. target_real = os.path.realpath(fs_path)
         3. 兩端各過 os.path.normcase（Windows 路徑大小寫不對稱）。
-        4. os.path.commonpath([root_n, target_n]) == root_n → 在底下
-           （相等視為在底下：root == target 回 True）。
-        5. 例外一律 fail-closed：ValueError（跨 drive／混絕對相對）或 OSError
-           （WinFsp/rclone 掛載點等）都記錄實際例外內容後回 False，不吞例外
-           放行。
+        4. 明確前綴比對：target_n == root_n → True；否則 target_n 是否以
+           「root_n + 分隔符」開頭（分隔符取 os.path.sep）。這能正確處理
+           UNC bare share root（如 \\server\share vs \\server\share\x），
+           並擋下前綴碰撞（\\server\share vs \\server\shared）與跨磁碟機。
+        5. 例外一律 fail-closed：ValueError（路徑字串本身不合法，如 embedded
+           null byte）或 OSError（WinFsp/rclone 掛載點等）都記錄實際例外內容
+           後回 False，不吞例外放行。比對結果為 False 時也記 WARNING，帶上
+           root_n／target_n 兩個 resolved 值方便排錯。
 
     Args:
         fs_path: 待檢查的原生 FS path（非 URI）。
@@ -579,21 +582,33 @@ def is_fs_path_under_dir(fs_path: str, root_fs_path: str) -> bool:
         系列的 dirfd 相對操作，Windows（本專案主平台）無等價語意。
         詳見 `plan-110b.md` 附錄 A 的 B9。
     """
+    _stage = "root_fs_path"
     try:
         root_real = os.path.realpath(root_fs_path)
+        _stage = "fs_path"
         target_real = os.path.realpath(fs_path)
         root_n = os.path.normcase(root_real)
         target_n = os.path.normcase(target_real)
-        return os.path.commonpath([root_n, target_n]) == root_n
+        if target_n == root_n:
+            return True
+        sep = os.path.sep
+        root_with_sep = root_n if root_n.endswith(sep) else root_n + sep
+        if not target_n.startswith(root_with_sep):
+            logger.warning(
+                f"is_fs_path_under_dir: 比對結果為 False — "
+                f"fs_path={fs_path!r}, root_fs_path={root_fs_path!r}, "
+                f"root_n={root_n!r}, target_n={target_n!r}"
+            )
+        return target_n.startswith(root_with_sep)
     except ValueError as e:
         logger.warning(
-            f"is_fs_path_under_dir: commonpath 比對失敗（可能跨 drive）— "
+            f"is_fs_path_under_dir: realpath({_stage}) 路徑字串不合法 — "
             f"fs_path={fs_path!r}, root_fs_path={root_fs_path!r}, error={e}"
         )
         return False
     except OSError as e:
         logger.warning(
-            f"is_fs_path_under_dir: realpath 解析失敗（可能掛載點異常）— "
+            f"is_fs_path_under_dir: realpath({_stage}) 解析失敗（可能掛載點異常）— "
             f"fs_path={fs_path!r}, root_fs_path={root_fs_path!r}, error={e}"
         )
         return False

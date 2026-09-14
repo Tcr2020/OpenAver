@@ -1377,8 +1377,7 @@ class _PartialOsPathProxy:
 
 class TestIsFsPathUnderDir:
     """測試 is_fs_path_under_dir(fs_path, root_fs_path) —— 原生 FS path containment
-    checker，走 CD-110b-4 的五步鏈（realpath 兩端 → normcase 兩端 → commonpath == root
-    → 例外 fail-closed）。
+    checker（realpath 兩端 → normcase 兩端 → 明確前綴比對 → 例外 fail-closed）。
 
     與既有 is_path_under_dir(path, dir_uri) 的職責分界：
     - is_path_under_dir：吃 file:/// URI，純字串前綴比對，不解析 ..、不解析 symlink，
@@ -1453,23 +1452,20 @@ class TestIsFsPathUnderDir:
         target = root / "not" / "created" / "yet"
         assert path_utils.is_fs_path_under_dir(str(target), str(root)) is True
 
-    def test_cross_drive_value_error_fails_closed_and_logs(self, monkeypatch, caplog):
-        """案例 8：跨 drive（mock commonpath 拋 ValueError）→ False 且有 warning 記錄。
+    def test_cross_drive_fails_closed(self, monkeypatch):
+        """跨磁碟機（C:\\x vs D:\\y）→ False。
 
-        monkeypatch 目標是 path_utils 自己的 `os` 名稱（獨立 namespace），不動
-        真正的全域 os 模組——理由同案例 10：避免萬一斷言失敗時，pytest 組
-        traceback 用到被打壞的真 os.path 而炸成 INTERNALERROR。
+        新演算法下跨磁碟機是正常無例外的 False 判定，不再走 ValueError。
+        用 Windows-style mock harness 驅動真正的生產比對路徑（不 mock commonpath）。
+        monkeypatch 目標是 path_utils 自己的 `os` 名稱，不動真正的全域 os 模組。
         """
-
-        def _raise_value_error(*args, **kwargs):
-            raise ValueError("path is on mount 'C:', start on mount 'D:'")
-
-        fake_os = types.SimpleNamespace(path=_PartialOsPathProxy(commonpath=_raise_value_error))
+        fake_os = types.SimpleNamespace(path=_PartialOsPathProxy(
+            realpath=ntpath.realpath,
+            normcase=ntpath.normcase,
+            sep=ntpath.sep,
+        ))
         monkeypatch.setattr(path_utils, 'os', fake_os)
-        with caplog.at_level(logging.WARNING):
-            result = path_utils.is_fs_path_under_dir(r'D:\y', r'C:\x')
-        assert result is False
-        assert any(record.levelname == 'WARNING' for record in caplog.records)
+        assert path_utils.is_fs_path_under_dir(r'D:\y', r'C:\x') is False
 
     def test_realpath_oserror_fails_closed_and_logs(self, monkeypatch, caplog):
         """案例 9：realpath 拋 OSError（mock，如 WinFsp/rclone 掛載點）→ False 且有
@@ -1487,40 +1483,64 @@ class TestIsFsPathUnderDir:
         assert any(record.levelname == 'WARNING' for record in caplog.records)
 
     def test_windows_case_insensitive_match(self, monkeypatch):
-        """案例 10：Windows 大小寫（C:\\Foo vs c:\\foo\\bar）→ True（不因大小寫誤殺，
+        """Windows 大小寫（C:\\Foo vs c:\\foo\\bar）→ True（不因大小寫誤殺，
         BE-PATH-01 #9）。
 
-        realpath 用 ntpath.realpath mock（在非 Windows 平台上不做 symlink 解析，
-        僅保留字面大小寫，足以模擬 Windows API 回傳的原始 casing）。commonpath
-        刻意用**純字面、不做大小寫容錯**的簡化版取代 ntpath.commonpath 真品——
-        CPython 的 ntpath.commonpath 內部本來就會自行 lower() 兩端做比對，直接
-        拿它來 mock 會蓋掉「我們自己有沒有呼叫 os.path.normcase」這件事，讓 M3
-        mutation（拿掉 normcase）測不出來。用這個不容錯版本，大小寫是否一致就
-        完全取決於我們自己的 normcase 呼叫。
+        realpath／normcase 用 ntpath mock；sep 必須明確覆寫為 ntpath.sep，否則
+        fallback 到 Linux 的 `/` 會讓前綴比對用錯分隔符。新演算法是大小寫敏感的
+        字串比較，normcase 一旦被刪，這條自然轉紅。
 
-        注意：monkeypatch 的目標是 path_utils 模組自己的 `os` 名稱（一個獨立
-        namespace 物件），**不是**真正的全域 os 模組——直接改真 os.path.realpath
-        會連 pytest 自身組 traceback 用的路徑解析都一併打壞，一旦這條測試在
-        mutation 驗證中真的斷言失敗，會變成 INTERNALERROR 而不是乾淨的紅，
-        掩蓋了本來要看到的訊號。
+        monkeypatch 目標是 path_utils 模組自己的 `os` 名稱，不是真正的全域 os 模組。
         """
-
-        def _case_sensitive_commonpath(paths):
-            split_paths = [p.split('\\') for p in paths]
-            common = []
-            for parts in zip(*split_paths):
-                if len(set(parts)) != 1:
-                    break
-                common.append(parts[0])
-            return '\\'.join(common)
-
         fake_os = types.SimpleNamespace(path=_PartialOsPathProxy(
             realpath=ntpath.realpath,
             normcase=ntpath.normcase,
-            commonpath=_case_sensitive_commonpath,
+            sep=ntpath.sep,
         ))
         monkeypatch.setattr(path_utils, 'os', fake_os)
         assert path_utils.is_fs_path_under_dir(r'c:\foo\bar', r'C:\Foo') is True
+
+    def test_unc_share_root_child_is_under_root(self, monkeypatch):
+        """UNC bare share root：\\\\server\\share\\x vs \\\\server\\share → True。
+
+        本次 bug 的直接回歸——舊 commonpath 對這組輸入會拋 ValueError 被誤判為
+        超出範圍；新前綴比對必須回 True。
+        """
+        fake_os = types.SimpleNamespace(path=_PartialOsPathProxy(
+            realpath=ntpath.realpath,
+            normcase=ntpath.normcase,
+            sep=ntpath.sep,
+        ))
+        monkeypatch.setattr(path_utils, 'os', fake_os)
+        assert path_utils.is_fs_path_under_dir(r'\\server\share\x', r'\\server\share') is True
+
+    def test_value_error_fails_closed_and_logs(self, caplog):
+        """含 null byte 的路徑觸發 realpath 原生 ValueError → False 且有 WARNING。
+
+        零 mock：Linux 上 os.path.realpath('a\\x00b') 真的會拋 ValueError。
+        這是保留 except ValueError 分支的唯一守衛。
+        """
+        with caplog.at_level(logging.WARNING):
+            result = path_utils.is_fs_path_under_dir('a\x00b', '/tmp')
+        assert result is False
+        assert any(record.levelname == 'WARNING' for record in caplog.records)
+
+    def test_false_result_logs_resolved_values(self, tmp_path, caplog):
+        """比對回 False 時，WARNING log 必須同時含 root_n／target_n 兩個 resolved 值。"""
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        root_n = os.path.normcase(os.path.realpath(str(root)))
+        target_n = os.path.normcase(os.path.realpath(str(outside)))
+        with caplog.at_level(logging.WARNING):
+            result = path_utils.is_fs_path_under_dir(str(outside), str(root))
+        assert result is False
+        warning_text = "\n".join(
+            r.getMessage() for r in caplog.records if r.levelname == 'WARNING'
+        )
+        assert root_n in warning_text
+        assert target_n in warning_text
 
     def test_prefix_collision_not_bare_startswith(self, tmp_path):
         """案例 11：前綴碰撞 /base/media2 vs /base/media → False。
