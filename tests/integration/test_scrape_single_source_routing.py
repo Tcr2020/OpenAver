@@ -5,7 +5,6 @@ CD-147d-7：無 metadata 時依 is_number_format 守門分流 smart_search / sea
 from core.config import load_config
 from core.scraper import extract_number, is_number_format
 from core.scrapers.utils import resolve_route_target
-from core.source_settings import is_uncensored_mode_effective
 
 
 # CD-147d-2 列出的 27 個 CASES（I-147d-1）
@@ -53,8 +52,16 @@ class TestScrapeSingleSourceRouting:
     """端點 mock-and-assert-call：合法番號走 smart_search、非法格式走 search_jav。"""
 
     def test_legal_number_calls_smart_search_not_search_jav(self, client, mocker):
-        """邊界 1：合法番號 + 無 metadata → smart_search 一次，search_jav 不呼叫。"""
-        expected_uncensored = is_uncensored_mode_effective(load_config())
+        """邊界 1：合法番號 + 無 metadata → smart_search 一次，search_jav 不呼叫。
+
+        pre-merge SA-pre-9 P3-2：無碼模式釘死 False（不讀本機 web/config.json）。
+        原本 `expected_uncensored = is_uncensored_mode_effective(load_config())`
+        與生產碼同源 ⇒ `assert kwargs[...] is expected_uncensored` 恆真、零鑑別力；
+        True 那一側由 :132 / :156 兩條各自釘死覆蓋。
+        """
+        mocker.patch(
+            "web.routers.scraper.is_uncensored_mode_effective", return_value=False
+        )
         expected_proxy = load_config().get("search", {}).get("proxy_url", "")
 
         mock_smart = mocker.patch(
@@ -75,13 +82,16 @@ class TestScrapeSingleSourceRouting:
 
         mock_smart.assert_called_once()
         kwargs = mock_smart.call_args.kwargs
-        assert kwargs.get("uncensored_mode") is expected_uncensored
+        assert kwargs.get("uncensored_mode") is False
         assert kwargs.get("proxy_url") == expected_proxy
         assert mock_smart.call_args.args[0] == "SONE-205"
         mock_search.assert_not_called()
 
     def test_legal_number_smart_search_empty_returns_not_found(self, client, mocker):
         """邊界 2：smart_search 回 [] → 同一句「找不到」錯誤。"""
+        mocker.patch(
+            "web.routers.scraper.is_uncensored_mode_effective", return_value=False
+        )
         mocker.patch("web.routers.scraper.smart_search", return_value=[])
         mocker.patch("web.routers.scraper.search_jav")
 
@@ -95,6 +105,12 @@ class TestScrapeSingleSourceRouting:
 
     def test_illegal_format_calls_search_jav_not_smart_search(self, client, mocker):
         """邊界 3：非番號格式 → search_jav 被呼叫，smart_search 不呼叫。"""
+        # pre-merge SA-pre-9 P3-2：無碼模式開著時非法格式也走 smart_search
+        # （Codex 二次審核 P2 的修正），不釘死的話 owner 在設定頁打開無碼模式，
+        # 這條與下面邊界 4 在本機就會紅——假紅。
+        mocker.patch(
+            "web.routers.scraper.is_uncensored_mode_effective", return_value=False
+        )
         expected_proxy = load_config().get("search", {}).get("proxy_url", "")
 
         mock_smart = mocker.patch("web.routers.scraper.smart_search")
@@ -118,6 +134,9 @@ class TestScrapeSingleSourceRouting:
 
     def test_illegal_format_search_jav_none_returns_not_found(self, client, mocker):
         """邊界 4：search_jav 回 None → 同一句「找不到」錯誤。"""
+        mocker.patch(
+            "web.routers.scraper.is_uncensored_mode_effective", return_value=False
+        )
         mocker.patch("web.routers.scraper.smart_search")
         mocker.patch("web.routers.scraper.search_jav", return_value=None)
 

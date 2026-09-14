@@ -398,6 +398,21 @@ class TestCapabilitiesDescriptionHonesty:
         assert "每個欄位各自取第一個有值的來源" in desc
         assert "不是「整包用第一家的資料」" in desc
 
+    def test_enrich_single_metadata_description_does_not_deny_fuzzy_carriers(self, client):
+        """pre-merge Opus branch review P2-1：147c 新寫的文案宣稱「關鍵字／模糊搜尋與
+        javlibrary 多版本清單不會帶 _summary／_rating」，但 search_partial／search_prefix／
+        _javbus_keyword_search 全部經 core.scraper.search_jav（internal_nfo_carriers 無條件
+        注入），實際上會帶。守住「文案不再宣稱模糊/關鍵字搜尋不帶 carrier」這個否定宣稱不
+        再出現，而不是逐字鎖新句子（會變成下一次改寫的絆腳石）。"""
+        data = client.get("/api/capabilities").json()
+        tool = next(t for t in data["tools"] if t["name"] == "enrich_single")
+        desc = tool["input_schema"]["properties"]["metadata"]["description"]
+        # 舊的假否定宣稱：不可再出現
+        assert "關鍵字／模糊搜尋與 javlibrary 多版本清單不會帶" not in desc
+        assert "有條件地帶" not in desc
+        # 正確事實：判準是「有沒有經過 search_jav」，不是搜尋模式名稱
+        assert "search_jav" in desc
+
 
 class TestCapabilitiesSourceEnum:
     """TASK-61a-4：4 處 source enum 由 get_source_enum() 生成（無硬編碼）"""

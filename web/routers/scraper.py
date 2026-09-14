@@ -1045,9 +1045,9 @@ async def batch_enrich_endpoint(request: BatchEnrichRequest):
                         status, payload = await loop.run_in_executor(None, _do_readonly)
                         if status == 'ok':
                             # CD-147b-5／147b-T4：與可寫同形——fill_missing 才套四項判準；
-                            # 其他 mode 維持 success（refresh_full 可能只更新 DB）。
-                            # 今天 fill_missing 仍零行為變化（readonly nfo_written=True 無條件）。
-                            # 縮圖失效仍掛 status=='ok'。
+                            # 其他 mode 維持 success（refresh_full 可能只更新 DB）。⚠️ 前端
+                            # didEnrichSomething() 沒有這道 mode 閘，多出 refresh_full 呼叫端時兩邊一起補。
+                            # 今天 fill_missing 零行為變化（readonly nfo_written=True 無條件）；縮圖失效仍掛 ok。
                             if request.mode != "fill_missing" or did_enrich_something(payload):
                                 success_count += 1
                             else:
@@ -1156,9 +1156,9 @@ async def batch_enrich_endpoint(request: BatchEnrichRequest):
                     )
                     result_dict = asdict(result)
                     if result.success:
-                        # CD-147b-5／147b-T4：fill_missing 才套四項判準（與前端
-                        # didEnrichSomething 同步）；其他 mode 維持 result.success
-                        # （refresh_full 可能只更新 DB）。縮圖失效仍掛 result.success。
+                        # CD-147b-5／147b-T4：fill_missing 才套四項判準（與前端 didEnrichSomething
+                        # 同步；⚠️ 前端沒有這道 mode 閘，多出 refresh_full 呼叫端時兩邊一起補）；
+                        # 其他 mode 維持 result.success（refresh_full 可能只更新 DB）。縮圖失效仍掛之。
                         if request.mode != "fill_missing" or did_enrich_something(result):
                             success_count += 1
                         else:
